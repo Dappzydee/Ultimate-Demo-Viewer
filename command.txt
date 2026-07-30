@@ -1,0 +1,4 @@
+demo_dust2.dem --player "AdrieN" --start 10:00 --end 10:20 --round 1
+python .\slop_color_script.py demo_dust2.dem --player "donk" --start 0:01 --end 0:03 --round 1 --grid 15 --tick-step 8
+
+pip install awpy trimesh numpy polars rtree pyembree
