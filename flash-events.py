@@ -6,13 +6,14 @@ import argparse
 from pathlib import Path
 
 from cs2_visibility.flash_events import export_flash_detonations, extract_flash_detonations
+from cs2_visibility.paths import prepare_output_path
 from cs2_visibility.progress import configure_logging
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="List exact flashbang_detonate events and optionally export them as JSON.")
     parser.add_argument("demo", type=Path, help="Path to a .dem file")
-    parser.add_argument("--json", type=Path, help="Write all normalized detonation events to this JSON file")
+    parser.add_argument("--json", type=Path, help="Write normalized detonation events to JSON (relative paths are placed in out/)")
     parser.add_argument("--verbose", action="store_true", help="Show parser schema and extraction diagnostics")
     parser.add_argument("--no-progress", action="store_true", help="Disable terminal progress bars")
     args = parser.parse_args()
@@ -30,8 +31,9 @@ def main() -> None:
         print(f"{flash.index:>5}  {flash.tick:>9}  ({x:>8.2f}, {y:>8.2f}, {z:>8.2f})  {str(flash.round_number or '-'):>5}  {flash.thrower or '-'}")
     print(f"Found {len(flashes)} flashbang detonation events.")
     if args.json:
-        export_flash_detonations(flashes, args.json)
-        print(f"Exported JSON to {args.json.resolve()}")
+        output_path = prepare_output_path(args.json)
+        export_flash_detonations(flashes, output_path)
+        print(f"Exported JSON to {output_path.resolve()}")
 
 
 if __name__ == "__main__":

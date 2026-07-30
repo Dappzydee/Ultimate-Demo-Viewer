@@ -9,6 +9,7 @@ from cs2_visibility.flash_coverage import FlashCoverageAnalyzer, FlashCoverageCo
 from cs2_visibility.flash_events import extract_flash_detonations, load_flash_detonation_json
 from cs2_visibility.geometry import load_tri_mesh
 from cs2_visibility.analysis import resolve_tri_path
+from cs2_visibility.paths import prepare_output_path
 from cs2_visibility.progress import configure_logging
 
 
@@ -25,7 +26,7 @@ def main() -> None:
     parser.add_argument("--samples-per-triangle", type=int, choices=(1, 4), default=4, help="Interior samples per face (default: 4)")
     parser.add_argument("--ray-batch-size", type=int, default=250000, help="Maximum rays per CPU/GPU dispatch")
     parser.add_argument("--no-gpu", action="store_true", help="Force CPU raycasting")
-    parser.add_argument("--out", type=Path, default=Path("flash_coverage.glb"), help="GLB output path")
+    parser.add_argument("--out", type=Path, default=Path("out/flash_coverage.glb"), help="GLB output path (relative paths are placed in out/)")
     parser.add_argument("--verbose", action="store_true", help="Show event selection and raycasting diagnostics")
     parser.add_argument("--no-progress", action="store_true", help="Disable terminal progress bars")
     args = parser.parse_args()
@@ -49,8 +50,9 @@ def main() -> None:
         analyzer = FlashCoverageAnalyzer(load_tri_mesh(tri_path), config)
         print(f"Simulating one selected flash with {analyzer.raycaster.name}...")
         result = analyzer.analyze(flash, not args.no_progress)
-        export_flash_coverage(analyzer.mesh, result.intensities, args.out)
-        print(f"Exported {int((result.intensities > 0).sum())} affected faces to {args.out.resolve()}.")
+        output_path = prepare_output_path(args.out)
+        export_flash_coverage(analyzer.mesh, result.intensities, output_path)
+        print(f"Exported {int((result.intensities > 0).sum())} affected faces to {output_path.resolve()}.")
         print(f"Tested {result.tested_rays} rays using {result.backend}. This is an occlusion-and-distance simulation, not Valve-exact blind duration.")
     except (ValueError, FileNotFoundError) as error:
         raise SystemExit(f"Error: {error}") from error

@@ -7,6 +7,7 @@ from pathlib import Path
 
 from .analysis import VisibilityAnalyzer, export_colored_mesh, load_demo_window, parse_time_seconds, resolve_tri_path
 from .models import AnalysisConfig
+from .paths import prepare_output_path
 from .progress import configure_logging
 
 
@@ -31,7 +32,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-gpu", action="store_true", help="Force the CPU raycaster")
     parser.add_argument("--verbose", action="store_true", help="Show raycasting and parser diagnostics")
     parser.add_argument("--no-progress", action="store_true", help="Disable terminal progress bars")
-    parser.add_argument("--out", type=Path, default=Path("seen_result.glb"), help="GLB output path")
+    parser.add_argument("--out", type=Path, default=Path("out/seen_result.glb"), help="GLB output path (relative paths are placed in out/)")
     return parser
 
 
@@ -52,8 +53,9 @@ def main() -> None:
         analyzer = VisibilityAnalyzer.from_tri_file(tri_path, config)
         print(f"Analyzing {len(poses)} poses at {tick_rate:g} ticks/s with {analyzer.raycaster.name}...")
         result = analyzer.analyze(poses, not args.no_progress)
-        export_colored_mesh(analyzer.mesh, result.seen_mask, args.out)
-        print(f"Exported {result.seen_mask.sum()} / {len(result.seen_mask)} seen faces to {args.out.resolve()}.")
+        output_path = prepare_output_path(args.out)
+        export_colored_mesh(analyzer.mesh, result.seen_mask, output_path)
+        print(f"Exported {result.seen_mask.sum()} / {len(result.seen_mask)} seen faces to {output_path.resolve()}.")
         print(f"Processed {result.processed_poses} poses and {result.tested_rays} visibility rays using {result.backend}.")
     except (ValueError, FileNotFoundError) as error:
         raise SystemExit(f"Error: {error}") from error

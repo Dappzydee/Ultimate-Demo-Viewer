@@ -12,6 +12,8 @@ python nvidia-warp-kimi.py match.dem --player "donk" --round 1 --start 1:00 --en
 
 The command uses NVIDIA Warp automatically when CUDA is available, otherwise it falls back to CPU raycasting. Use `--no-gpu` to force CPU mode.
 
+Generated artifacts are written to `out/` by default. Relative `--out` and `--json` values are also placed in `out/`; use an absolute path only when you intentionally want output elsewhere.
+
 If a demo header has no usable tick rate, use an explicit override:
 
 ```powershell
