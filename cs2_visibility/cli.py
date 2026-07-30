@@ -7,6 +7,7 @@ from pathlib import Path
 
 from .analysis import VisibilityAnalyzer, export_colored_mesh, load_demo_window, parse_time_seconds, resolve_tri_path
 from .models import AnalysisConfig
+from .progress import configure_logging
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -28,12 +29,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--eye-height", type=float, default=64.0, help="Standing eye height above player origin")
     parser.add_argument("--crouch-eye-height", type=float, default=46.0, help="Crouched eye height above player origin")
     parser.add_argument("--no-gpu", action="store_true", help="Force the CPU raycaster")
+    parser.add_argument("--verbose", action="store_true", help="Show raycasting and parser diagnostics")
+    parser.add_argument("--no-progress", action="store_true", help="Disable terminal progress bars")
     parser.add_argument("--out", type=Path, default=Path("seen_result.glb"), help="GLB output path")
     return parser
 
 
 def main() -> None:
     args = build_parser().parse_args()
+    configure_logging(args.verbose)
     demo_path = Path(args.demo)
     if not demo_path.exists():
         raise SystemExit(f"Demo file not found: {demo_path}")
@@ -47,7 +51,7 @@ def main() -> None:
         print(f"Loading {map_name} geometry from {tri_path}...")
         analyzer = VisibilityAnalyzer.from_tri_file(tri_path, config)
         print(f"Analyzing {len(poses)} poses at {tick_rate:g} ticks/s with {analyzer.raycaster.name}...")
-        result = analyzer.analyze(poses)
+        result = analyzer.analyze(poses, not args.no_progress)
         export_colored_mesh(analyzer.mesh, result.seen_mask, args.out)
         print(f"Exported {result.seen_mask.sum()} / {len(result.seen_mask)} seen faces to {args.out.resolve()}.")
         print(f"Processed {result.processed_poses} poses and {result.tested_rays} visibility rays using {result.backend}.")

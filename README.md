@@ -51,3 +51,19 @@ analyzer = VisibilityAnalyzer.from_tri_file(Path("de_dust2.tri"), AnalysisConfig
 result = analyzer.analyze(poses)
 export_colored_mesh(analyzer.mesh, result.seen_mask, Path("seen_result.glb"))
 ```
+
+## Flash coverage
+
+List the exact `flashbang_detonate` pop positions in a demo and export them for later selection:
+
+```powershell
+python flash-events.py match.dem --json flashes.json
+```
+
+Then simulate coverage for exactly one selected event—never every flash by default:
+
+```powershell
+python flash-coverage.py --flash-json flashes.json --flash-index 12 --out flash_12.glb
+```
+
+The resulting GLB uses gray for no coverage, dark red for weak coverage, and light yellow for stronger coverage. Intensity is an occlusion-and-distance simulation, not Valve's exact blind-duration calculation. Both tools include progress bars; add `--verbose` for diagnostics or `--no-progress` for log-friendly operation.

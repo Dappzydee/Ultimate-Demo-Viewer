@@ -12,8 +12,9 @@ import trimesh
 from awpy import Demo
 from awpy.data import TRIS_DIR
 
-from .geometry import forward_vector, interior_sample_points, load_tri_mesh
+from .geometry import export_glb, forward_vector, interior_sample_points, load_tri_mesh
 from .models import AnalysisConfig, PlayerPose, VisibilityResult
+from .progress import ProgressBar
 from .raycasting import create_raycaster
 
 
@@ -92,7 +93,7 @@ class VisibilityAnalyzer:
     def from_tri_file(cls, tri_path: Path, config: AnalysisConfig) -> "VisibilityAnalyzer":
         return cls(load_tri_mesh(tri_path), config)
 
-    def analyze(self, poses: Iterable[PlayerPose]) -> VisibilityResult:
+    def analyze(self, poses: Iterable[PlayerPose], show_progress: bool = True) -> VisibilityResult:
         """Batch raycasts from multiple ticks while maintaining per-face evidence."""
         # Track individual sample locations, rather than incrementing an
         # unbounded count each tick. This is a real boolean mask: repeatedly
@@ -122,8 +123,10 @@ class VisibilityAnalyzer:
             pending_origins.clear(); pending_directions.clear(); pending_faces.clear(); pending_sample_ids.clear(); pending_lengths.clear()
             pending_count = 0
 
+        pose_list = list(poses)
+        progress = ProgressBar(len(pose_list), "Raycasting player vision", show_progress)
         processed = 0
-        for pose in poses:
+        for pose in pose_list:
             processed += 1
             offsets = self.sample_points - pose.position
             distances = np.linalg.norm(offsets, axis=1)
@@ -131,6 +134,7 @@ class VisibilityAnalyzer:
             directions = np.divide(offsets, distances[:, None], out=np.zeros_like(offsets), where=distances[:, None] > 1e-6)
             candidates = valid_distance & ((directions @ forward_vector(pose.yaw_degrees, pose.pitch_degrees)) >= cos_half_fov)
             if not np.any(candidates):
+                progress.update(processed)
                 continue
             faces = self.sample_face_ids[candidates]
             sample_ids = np.flatnonzero(candidates)
@@ -142,7 +146,9 @@ class VisibilityAnalyzer:
             pending_count += len(faces)
             if pending_count >= self.config.ray_batch_size:
                 flush()
+            progress.update(processed)
         flush()
+        progress.finish()
         seen_mask = seen_samples.reshape(-1, self.config.samples_per_triangle).sum(axis=1) >= self.config.min_visible_samples
         return VisibilityResult(seen_mask, processed, ray_count, self.raycaster.name)
 
@@ -159,4 +165,4 @@ def export_colored_mesh(mesh: trimesh.Trimesh, seen_mask: np.ndarray, output_pat
     colors = np.full((len(mesh.faces), 4), (160, 160, 160, 255), dtype=np.uint8)
     colors[seen_mask] = (255, 0, 0, 255)
     mesh.visual.face_colors = colors
-    mesh.export(output_path)
+    export_glb(mesh, output_path)
