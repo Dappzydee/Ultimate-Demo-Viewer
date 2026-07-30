@@ -1,4 +1,13 @@
+# Python env (
+# TODO: ignore rule should be more general)
 demo_env/
 
+# Demo and output files
 *.dem
 *.glb
+
+# Output files
+out/
+
+# Python stuff
+__pycache__/
