@@ -63,7 +63,7 @@ def forward_vector(yaw_degrees: float, pitch_degrees: float) -> np.ndarray:
     )
 
 
-def export_glb(mesh: trimesh.Trimesh, output_path: Path) -> None:
+def export_glb(mesh: trimesh.Trimesh | trimesh.Scene, output_path: Path) -> None:
     """Export GLB while supporting older Trimesh releases on NumPy 2.x."""
     # Older Trimesh releases call ndarray.ptp(), removed by NumPy 2.0, through
     # this helper when constructing glTF scene transforms. Replacing only that

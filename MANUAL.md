@@ -104,6 +104,8 @@ The flash coverage GLB uses:
 - Dark red: weak simulated effect.
 - Light yellow: stronger simulated effect.
 
+Each flash-coverage GLB also contains a separate, bright yellow sphere named `flash_detonation_marker`. In Blender's Outliner, select that object and use **Numpad `.`** (Frame Selected) to jump directly to the exact pop position. Use `--marker-radius` to make the marker larger or smaller.
+
 The simulation casts from the exact detonation position through static map geometry. Intensity falls off with distance and is not a Valve-exact blind-duration model. It also does not know the direction a hypothetical player would be facing.
 
 ### Useful flash-coverage options

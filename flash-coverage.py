@@ -25,6 +25,7 @@ def main() -> None:
     parser.add_argument("--falloff-power", type=float, default=1.0, help="Distance falloff exponent; higher means faster fade")
     parser.add_argument("--samples-per-triangle", type=int, choices=(1, 4), default=4, help="Interior samples per face (default: 4)")
     parser.add_argument("--ray-batch-size", type=int, default=250000, help="Maximum rays per CPU/GPU dispatch")
+    parser.add_argument("--marker-radius", type=float, default=24.0, help="Radius of the bright, selectable flash marker sphere (default: 24)")
     parser.add_argument("--no-gpu", action="store_true", help="Force CPU raycasting")
     parser.add_argument("--out", type=Path, default=Path("out/flash_coverage.glb"), help="GLB output path (relative paths are placed in out/)")
     parser.add_argument("--verbose", action="store_true", help="Show event selection and raycasting diagnostics")
@@ -53,7 +54,7 @@ def main() -> None:
         print(f"Simulating one selected flash with {analyzer.raycaster.name}...")
         result = analyzer.analyze(flash, not args.no_progress)
         output_path = prepare_output_path(args.out)
-        export_flash_coverage(analyzer.mesh, result.intensities, output_path)
+        export_flash_coverage(analyzer.mesh, result.intensities, flash, output_path, args.marker_radius)
         print(f"Exported {int((result.intensities > 0).sum())} affected faces to {output_path.resolve()}.")
         print(f"Tested {result.tested_rays} rays using {result.backend}. This is an occlusion-and-distance simulation, not Valve-exact blind duration.")
     except (ValueError, FileNotFoundError) as error:

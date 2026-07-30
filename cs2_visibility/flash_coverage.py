@@ -85,10 +85,14 @@ class FlashCoverageAnalyzer:
         return FlashCoverageResult(intensities, len(candidate_ids), self.raycaster.name)
 
 
-def export_flash_coverage(mesh: trimesh.Trimesh, intensities: np.ndarray, output_path: Path) -> None:
-    """Export a GLB with gray=unaffected, dark red=weak, yellow=strong coverage."""
+def export_flash_coverage(
+    mesh: trimesh.Trimesh, intensities: np.ndarray, flash: FlashDetonation, output_path: Path, marker_radius: float = 24.0,
+) -> None:
+    """Export coverage plus a separately selectable detonation marker sphere."""
     if len(intensities) != len(mesh.faces):
         raise ValueError("Expected one flash intensity for every mesh face.")
+    if marker_radius <= 0:
+        raise ValueError("marker_radius must be positive.")
     colors = np.full((len(mesh.faces), 4), (160, 160, 160, 255), dtype=np.uint8)
     affected = intensities > 0
     # Stronger flash coverage becomes visually lighter, as requested.
@@ -98,4 +102,14 @@ def export_flash_coverage(mesh: trimesh.Trimesh, intensities: np.ndarray, output
     colors[affected, :3] = (weak + strength * (strong - weak)).astype(np.uint8)
     output_mesh = mesh.copy()
     output_mesh.visual.face_colors = colors
-    export_glb(output_mesh, output_path)
+    # A separate scene object lets Blender users select and focus the exact
+    # flash pop location independently of the large map geometry.
+    marker = trimesh.creation.uv_sphere(radius=marker_radius, count=[16, 16])
+    # Translate vertices directly instead of apply_translation(): the installed
+    # older Trimesh release calls a NumPy 2-removed API in that helper.
+    marker.vertices += np.asarray(flash.position, dtype=np.float64)
+    marker.visual.face_colors = np.tile((255, 255, 0, 255), (len(marker.faces), 1))
+    scene = trimesh.Scene()
+    scene.add_geometry(output_mesh, node_name="flash_coverage", geom_name="flash_coverage")
+    scene.add_geometry(marker, node_name="flash_detonation_marker", geom_name="flash_detonation_marker")
+    export_glb(scene, output_path)

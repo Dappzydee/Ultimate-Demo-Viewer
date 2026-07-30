@@ -69,3 +69,5 @@ python flash-coverage.py --flash-json flashes.json --flash-index 12 --out flash_
 ```
 
 The resulting GLB uses gray for no coverage, dark red for weak coverage, and light yellow for stronger coverage. Intensity is an occlusion-and-distance simulation, not Valve's exact blind-duration calculation. Both tools include progress bars; add `--verbose` for diagnostics or `--no-progress` for log-friendly operation.
+
+The GLB also includes a separate bright yellow object named `flash_detonation_marker` at the exact pop position, so it can be selected and focused in Blender.
