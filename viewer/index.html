@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>CS2 Result Viewer</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <div id="app">
+      <header class="topbar">
+        <div class="brand">
+          <div class="brand-mark">V</div>
+          <div>
+            <strong>CS2 Result Viewer</strong>
+            <span id="model-name">No model loaded</span>
+          </div>
+        </div>
+        <div class="toolbar" role="toolbar" aria-label="Viewer tools">
+          <button id="open-button" class="primary" title="Open GLB (Ctrl+O)">Open GLB</button>
+          <input id="file-input" type="file" accept=".glb,model/gltf-binary" hidden>
+          <span class="divider"></span>
+          <button id="frame-button" title="Frame scene or selected object (F)">Frame</button>
+          <button id="projection-button" title="Toggle perspective/orthographic (5)">Perspective</button>
+          <button id="wireframe-button" aria-pressed="false" title="Toggle wireframe (Shift+W)">Wireframe</button>
+          <button id="grid-button" class="active" aria-pressed="true" title="Toggle grid (G)">Grid</button>
+          <button id="axes-button" class="active" aria-pressed="true" title="Toggle axes (X)">Axes</button>
+          <span class="divider"></span>
+          <label class="select-label">Shading
+            <select id="shading-select">
+              <option value="lit">Lit colors</option>
+              <option value="flat">Flat colors</option>
+              <option value="normal">Normals</option>
+            </select>
+          </label>
+          <label class="slider-label" title="Scene exposure">
+            <span>Exposure</span>
+            <input id="exposure" type="range" min="0.4" max="1.8" step="0.05" value="1">
+          </label>
+        </div>
+      </header>
+
+      <main>
+        <aside class="sidebar">
+          <section>
+            <div class="section-heading">
+              <h2>Scene objects</h2>
+              <button id="show-all-button" class="text-button">Show all</button>
+            </div>
+            <div id="object-list" class="object-list empty">Open a GLB to inspect its objects.</div>
+          </section>
+          <section class="details-section">
+            <h2>Selection</h2>
+            <dl id="selection-details">
+              <div><dt>Name</dt><dd>—</dd></div>
+              <div><dt>Triangles</dt><dd>—</dd></div>
+              <div><dt>Vertices</dt><dd>—</dd></div>
+              <div><dt>Bounds</dt><dd>—</dd></div>
+            </dl>
+          </section>
+          <section class="help">
+            <h2>Navigation</h2>
+            <p><kbd>LMB</kbd> orbit · <kbd>MMB</kbd> pan · <kbd>Wheel</kbd> zoom</p>
+            <p><kbd>WASD</kbd> move · <kbd>Q/E</kbd> down/up · <kbd>F</kbd> frame</p>
+          </section>
+        </aside>
+
+        <div id="viewport">
+          <canvas id="canvas" tabindex="0" aria-label="3D model viewport"></canvas>
+          <div class="viewport-badge">Z UP</div>
+          <div id="drop-zone" class="drop-zone">
+            <div class="drop-icon">GLB</div>
+            <h1>Inspect analyzer output directly</h1>
+            <p>Drop a colored <strong>.glb</strong> here or open one from disk.</p>
+            <button id="empty-open-button" class="primary">Choose GLB</button>
+          </div>
+          <div id="loading" class="loading" hidden>
+            <div class="spinner"></div>
+            <strong id="loading-title">Loading model…</strong>
+            <span id="loading-detail"></span>
+          </div>
+          <div id="toast" class="toast" role="status" hidden></div>
+          <div class="statusbar">
+            <span id="status-summary">Ready</span>
+            <span id="camera-status">—</span>
+            <span id="fps-status">—</span>
+          </div>
+        </div>
+      </main>
+    </div>
+    <script type="module" src="app.js"></script>
+  </body>
+</html>
