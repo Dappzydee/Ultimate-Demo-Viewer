@@ -15,6 +15,7 @@ def main() -> None:
     parser.add_argument("demo", type=Path, help="Path to a .dem file")
     parser.add_argument("--json", type=Path, help="Write normalized detonation events to JSON (relative paths are placed in out/)")
     parser.add_argument("--verbose", action="store_true", help="Show parser schema and extraction diagnostics")
+    parser.add_argument("--traceback", action="store_true", help="Show the complete Python traceback for an error")
     parser.add_argument("--no-progress", action="store_true", help="Disable terminal progress bars")
     args = parser.parse_args()
     if not args.demo.exists():
@@ -23,6 +24,8 @@ def main() -> None:
     try:
         flashes = extract_flash_detonations(args.demo, not args.no_progress)
     except ValueError as error:
+        if args.traceback:
+            raise
         raise SystemExit(f"Error: {error}") from error
     print("index  tick       position (X, Y, Z)                 round  thrower")
     print("-----  ---------  ----------------------------------  -----  -------")

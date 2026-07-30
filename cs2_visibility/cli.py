@@ -31,6 +31,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--crouch-eye-height", type=float, default=46.0, help="Crouched eye height above player origin")
     parser.add_argument("--no-gpu", action="store_true", help="Force the CPU raycaster")
     parser.add_argument("--verbose", action="store_true", help="Show raycasting and parser diagnostics")
+    parser.add_argument("--traceback", action="store_true", help="Show the complete Python traceback for an error")
     parser.add_argument("--no-progress", action="store_true", help="Disable terminal progress bars")
     parser.add_argument("--out", type=Path, default=Path("out/seen_result.glb"), help="GLB output path (relative paths are placed in out/)")
     return parser
@@ -58,6 +59,8 @@ def main() -> None:
         print(f"Exported {result.seen_mask.sum()} / {len(result.seen_mask)} seen faces to {output_path.resolve()}.")
         print(f"Processed {result.processed_poses} poses and {result.tested_rays} visibility rays using {result.backend}.")
     except (ValueError, FileNotFoundError) as error:
+        if args.traceback:
+            raise
         raise SystemExit(f"Error: {error}") from error
 
 

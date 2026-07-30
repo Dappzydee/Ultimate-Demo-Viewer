@@ -34,6 +34,7 @@ Long-running calculations show a terminal progress bar by default.
 - Add `--verbose` to show useful diagnostics such as selected events, mesh candidates, ray batches, and the chosen GPU/CPU backend.
 - Add `--no-progress` when running in a log file, CI system, or non-interactive terminal.
 - Add `--no-gpu` to force the CPU backend for comparison/debugging.
+- Add `--traceback` to print the full Python exception traceback, including the source file and line number, for handled errors. Unexpected programming errors already print a traceback by default.
 
 ## Player vision
 
@@ -88,6 +89,8 @@ Use `flash-coverage.py` to simulate coverage for one explicitly selected flash. 
 ```powershell
 python flash-coverage.py --flash-json flashes.json --flash-index 12 --out flash_12.glb
 ```
+
+Because generated JSON goes into `out/`, either `--flash-json out/flashes.json` or the shorter `--flash-json flashes.json` works.
 
 You can select directly from a demo instead of JSON, but must specify the event index:
 
