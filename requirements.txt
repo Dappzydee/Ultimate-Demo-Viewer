@@ -1,0 +1,9 @@
+# Core analyzer dependencies
+awpy
+trimesh
+numpy
+polars
+
+# Optional but recommended for NVIDIA GPU raycasting.
+# The analyzer falls back to CPU raycasting when this is unavailable.
+warp-lang
