@@ -23,7 +23,7 @@ python nvidia-warp-kimi.py match.dem --player "donk" --round 1 --start 0 --end 2
 Before running, install the dependencies and download Awpy geometry once:
 
 ```powershell
-pip install awpy trimesh numpy polars warp-lang
+pip install -r requirements.txt
 awpy get tris
 ```
 

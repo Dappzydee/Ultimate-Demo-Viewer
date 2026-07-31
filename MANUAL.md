@@ -21,7 +21,7 @@ Generated GLB and JSON files are placed in the project's `out/` folder. A relati
 Install dependencies from the project directory:
 
 ```powershell
-pip install awpy trimesh numpy polars warp-lang
+pip install -r requirements.txt
 awpy get tris
 ```
 
