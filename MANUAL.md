@@ -1,6 +1,6 @@
 # CS2 Demo Visualization Manual
 
-This software analyzes a Counter-Strike 2 `.dem` file and exports colored 3D map geometry as `.glb` files for Blender. The project currently contains two visualization tools:
+This software analyzes a Counter-Strike 2 `.dem` file and exports colored 3D map geometry as `.glb` files for its local viewer or other glTF-compatible tools. The project currently contains two visualization tools:
 
 - Player vision: static map faces a selected player could see during a selected time window.
 - Flash coverage: static map faces that could be affected by one selected flashbang detonation.
@@ -21,7 +21,7 @@ Generated GLB and JSON files are placed in the project's `out/` folder. A relati
 Install dependencies from the project directory:
 
 ```powershell
-pip install awpy trimesh numpy polars warp-lang
+pip install -r requirements.txt
 awpy get tris
 ```
 
@@ -121,6 +121,18 @@ python flash-coverage.py --flash-json flashes.json --flash-index 12 `
 - `--samples-per-triangle`: use `4` for more resilient coverage around small occluders; use `1` for a faster rough pass.
 - `--map de_dust2`: required only when the selected JSON does not include `map_name`.
 - `--tri C:\path\to\map.tri`: replaces Awpy's default map mesh.
+
+## Viewing results locally
+
+Launch the included viewer with a result file:
+
+```powershell
+python viewer.py out/player_vision.glb
+```
+
+The command opens a local browser window. You can open or drag another GLB into it at any time. Left-drag orbits, middle-drag pans, the wheel zooms, `WASD` and `Q/E` move, and `F` frames the selected object or full scene. Use the scene list to select, hide, or double-click-frame named objects such as `flash_detonation_marker`. The toolbar exposes flat colors, lit colors, normals, wireframe, grid, axes, and perspective/orthographic views.
+
+The viewer requires a current browser with WebGL 2 but has no extra Python or JavaScript dependencies. The local server listens only on `127.0.0.1`; model data is not uploaded.
 
 ## Viewing results in Blender
 

@@ -1,0 +1,424 @@
+import { boundsCenter, boundsRadius, lookAt, multiply, orthographic, perspective, v3 } from "./math.js";
+
+const VERTEX_SHADER = `#version 300 es
+precision highp float;
+layout(location=0) in vec3 a_position;
+layout(location=1) in vec4 a_color;
+uniform mat4 u_viewProjection;
+uniform mat4 u_model;
+uniform vec4 u_baseColor;
+uniform bool u_hasColor;
+out vec4 v_color;
+out vec3 v_worldPosition;
+void main() {
+  vec4 world = u_model * vec4(a_position, 1.0);
+  v_worldPosition = world.xyz;
+  v_color = (u_hasColor ? a_color : vec4(1.0)) * u_baseColor;
+  gl_Position = u_viewProjection * world;
+}`;
+
+const FRAGMENT_SHADER = `#version 300 es
+precision highp float;
+in vec4 v_color;
+in vec3 v_worldPosition;
+uniform int u_shading;
+uniform float u_exposure;
+uniform bool u_selected;
+uniform bool u_wirePass;
+out vec4 outColor;
+void main() {
+  if (u_wirePass) {
+    outColor = u_selected ? vec4(1.0, 0.72, 0.22, 0.95) : vec4(0.04, 0.055, 0.07, 0.82);
+    return;
+  }
+  vec3 normal = normalize(cross(dFdx(v_worldPosition), dFdy(v_worldPosition)));
+  if (!gl_FrontFacing) normal = -normal;
+  vec3 color;
+  if (u_shading == 2) {
+    color = normal * 0.5 + 0.5;
+  } else {
+    color = v_color.rgb;
+    if (u_shading == 0) {
+      vec3 light = normalize(vec3(0.38, -0.46, 0.80));
+      float diffuse = max(dot(normal, light), 0.0);
+      color *= 0.38 + diffuse * 0.72;
+    }
+  }
+  if (u_selected) color = mix(color, vec3(1.0, 0.62, 0.18), 0.13);
+  color = vec3(1.0) - exp(-color * u_exposure);
+  color = pow(color, vec3(1.0 / 2.2));
+  outColor = vec4(color, v_color.a);
+}`;
+
+const LINE_VERTEX_SHADER = `#version 300 es
+precision highp float;
+layout(location=0) in vec3 a_position;
+layout(location=1) in vec4 a_color;
+uniform mat4 u_viewProjection;
+out vec4 v_color;
+void main() { v_color = a_color; gl_Position = u_viewProjection * vec4(a_position, 1.0); }`;
+
+const LINE_FRAGMENT_SHADER = `#version 300 es
+precision highp float;
+in vec4 v_color;
+out vec4 outColor;
+void main() { outColor = v_color; }`;
+
+const TYPE_ENUM = { 5120: 0x1400, 5121: 0x1401, 5122: 0x1402, 5123: 0x1403, 5125: 0x1405, 5126: 0x1406 };
+
+export class ViewerRenderer {
+  constructor(canvas, onStatus = () => {}) {
+    this.canvas = canvas;
+    this.gl = canvas.getContext("webgl2", { antialias: true, alpha: false, powerPreference: "high-performance" });
+    if (!this.gl) throw new Error("WebGL 2 is required. Try a current Chrome, Edge, or Firefox browser.");
+    this.onStatus = onStatus;
+    this.program = createProgram(this.gl, VERTEX_SHADER, FRAGMENT_SHADER);
+    this.lineProgram = createProgram(this.gl, LINE_VERTEX_SHADER, LINE_FRAGMENT_SHADER);
+    this.model = null;
+    this.resources = [];
+    this.selectedId = null;
+    this.shading = 0;
+    this.exposure = 1;
+    this.wireframe = false;
+    this.showGrid = true;
+    this.showAxes = true;
+    this.projection = "perspective";
+    this.camera = { target: [0, 0, 0], yaw: Math.PI * 0.22, pitch: Math.PI * 0.24, distance: 10, orthoSize: 5 };
+    this.sceneRadius = 10;
+    this.lineResources = null;
+    this.keys = new Set();
+    this.lastFrame = performance.now();
+    this.fpsSamples = [];
+    this.needsRender = true;
+    this.#installControls();
+    new ResizeObserver(() => this.requestRender()).observe(canvas);
+    requestAnimationFrame((time) => this.#frame(time));
+  }
+
+  setModel(model) {
+    this.#disposeModel();
+    this.model = model;
+    this.resources = model.drawables.map((drawable) => this.#uploadDrawable(drawable));
+    this.lineResources = this.#createReferenceLines(model.bounds);
+    this.selectedId = null;
+    this.frameBounds(model.bounds, true);
+  }
+
+  frameBounds(bounds, resetAngle = false) {
+    if (!bounds) return;
+    const radius = Math.max(boundsRadius(bounds), 0.01);
+    this.sceneRadius = Math.max(this.model ? boundsRadius(this.model.bounds) : radius, 0.01);
+    this.camera.target = boundsCenter(bounds);
+    this.camera.distance = radius / Math.tan(Math.PI / 7) * 1.25;
+    this.camera.orthoSize = radius * 1.2;
+    if (resetAngle) {
+      this.camera.yaw = Math.PI * 0.22;
+      this.camera.pitch = Math.PI * 0.24;
+    }
+    this.requestRender();
+  }
+
+  frameSelection() {
+    const selected = this.model?.drawables.find((item) => item.id === this.selectedId);
+    this.frameBounds(selected?.bounds || this.model?.bounds);
+  }
+
+  setSelected(id) { this.selectedId = id; this.requestRender(); }
+  setShading(value) { this.shading = { lit: 0, flat: 1, normal: 2 }[value] ?? 0; this.requestRender(); }
+  setExposure(value) { this.exposure = Number(value); this.requestRender(); }
+  setWireframe(value) { this.wireframe = value; this.requestRender(); }
+  setGrid(value) { this.showGrid = value; this.requestRender(); }
+  setAxes(value) { this.showAxes = value; this.requestRender(); }
+  setProjection(value) { this.projection = value; this.requestRender(); }
+  requestRender() { this.needsRender = true; }
+
+  #frame(time) {
+    const delta = Math.min((time - this.lastFrame) / 1000, 0.1);
+    this.lastFrame = time;
+    const moving = this.#updateMovement(delta);
+    if (this.needsRender || moving) this.#render(time);
+    requestAnimationFrame((nextTime) => this.#frame(nextTime));
+  }
+
+  #render(time) {
+    const gl = this.gl;
+    const dpr = Math.min(devicePixelRatio || 1, 2);
+    const width = Math.max(1, Math.floor(this.canvas.clientWidth * dpr));
+    const height = Math.max(1, Math.floor(this.canvas.clientHeight * dpr));
+    if (this.canvas.width !== width || this.canvas.height !== height) {
+      this.canvas.width = width;
+      this.canvas.height = height;
+    }
+    gl.viewport(0, 0, width, height);
+    gl.clearColor(0.055, 0.068, 0.084, 1);
+    gl.clearDepth(1);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    gl.enable(gl.DEPTH_TEST);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+
+    const eye = this.#eyePosition();
+    const view = lookAt(eye, this.camera.target, [0, 0, 1]);
+    const aspect = width / height;
+    const far = Math.max(this.sceneRadius * 20, this.camera.distance + this.sceneRadius * 5, 100);
+    const near = Math.max(far / 100000, 0.01);
+    const projection = this.projection === "orthographic"
+      ? orthographic(this.camera.orthoSize, aspect, -far, far)
+      : perspective(Math.PI / 3, aspect, near, far);
+    const viewProjection = multiply(projection, view);
+
+    if (this.lineResources && (this.showGrid || this.showAxes)) this.#drawReferenceLines(viewProjection);
+    if (this.model) this.#drawModel(viewProjection);
+    this.needsRender = false;
+
+    this.fpsSamples.push(time);
+    while (this.fpsSamples[0] < time - 1000) this.fpsSamples.shift();
+    this.onStatus({ eye, fps: Math.max(0, this.fpsSamples.length - 1) });
+  }
+
+  #drawModel(viewProjection) {
+    const gl = this.gl;
+    gl.useProgram(this.program);
+    uniformMatrix(gl, this.program, "u_viewProjection", viewProjection);
+    gl.uniform1i(gl.getUniformLocation(this.program, "u_shading"), this.shading);
+    gl.uniform1f(gl.getUniformLocation(this.program, "u_exposure"), this.exposure);
+    for (const resource of this.resources) {
+      const drawable = resource.drawable;
+      if (!drawable.visible) continue;
+      gl.bindVertexArray(resource.vao);
+      uniformMatrix(gl, this.program, "u_model", drawable.worldMatrix);
+      gl.uniform4fv(gl.getUniformLocation(this.program, "u_baseColor"), drawable.baseColor);
+      gl.uniform1i(gl.getUniformLocation(this.program, "u_hasColor"), Boolean(drawable.color));
+      gl.uniform1i(gl.getUniformLocation(this.program, "u_selected"), drawable.id === this.selectedId);
+      gl.uniform1i(gl.getUniformLocation(this.program, "u_wirePass"), false);
+      if (drawable.doubleSided) gl.disable(gl.CULL_FACE); else { gl.enable(gl.CULL_FACE); gl.cullFace(gl.BACK); }
+      if (resource.indexBuffer) gl.drawElements(gl.TRIANGLES, resource.indexCount, resource.indexType, 0);
+      else gl.drawArrays(gl.TRIANGLES, 0, drawable.vertexCount);
+
+      if (this.wireframe) {
+        if (!resource.wireIndexBuffer) this.#createWireIndices(resource);
+        gl.uniform1i(gl.getUniformLocation(this.program, "u_wirePass"), true);
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, resource.wireIndexBuffer);
+        gl.drawElements(gl.LINES, resource.wireIndexCount, gl.UNSIGNED_INT, 0);
+        if (resource.indexBuffer) gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, resource.indexBuffer);
+      }
+    }
+    gl.bindVertexArray(null);
+  }
+
+  #drawReferenceLines(viewProjection) {
+    const gl = this.gl;
+    gl.useProgram(this.lineProgram);
+    uniformMatrix(gl, this.lineProgram, "u_viewProjection", viewProjection);
+    gl.bindVertexArray(this.lineResources.vao);
+    if (this.showGrid) gl.drawArrays(gl.LINES, 0, this.lineResources.gridVertices);
+    if (this.showAxes) gl.drawArrays(gl.LINES, this.lineResources.gridVertices, 6);
+    gl.bindVertexArray(null);
+  }
+
+  #uploadDrawable(drawable) {
+    const gl = this.gl;
+    const vao = gl.createVertexArray();
+    gl.bindVertexArray(vao);
+    const vertexBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, drawable.position.array, gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, drawable.position.components, TYPE_ENUM[drawable.position.componentType], drawable.position.normalized, 0, 0);
+
+    let colorBuffer = null;
+    if (drawable.color) {
+      colorBuffer = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, colorBuffer);
+      gl.bufferData(gl.ARRAY_BUFFER, drawable.color.array, gl.STATIC_DRAW);
+      gl.enableVertexAttribArray(1);
+      gl.vertexAttribPointer(1, drawable.color.components, TYPE_ENUM[drawable.color.componentType], drawable.color.normalized, 0, 0);
+    } else {
+      gl.disableVertexAttribArray(1);
+      gl.vertexAttrib4f(1, 1, 1, 1, 1);
+    }
+
+    let indexBuffer = null;
+    let indexType = null;
+    let indexCount = 0;
+    if (drawable.indices) {
+      indexBuffer = gl.createBuffer();
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
+      gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, drawable.indices.array, gl.STATIC_DRAW);
+      indexType = TYPE_ENUM[drawable.indices.componentType];
+      indexCount = drawable.indices.count;
+    }
+    gl.bindVertexArray(null);
+    return { drawable, vao, vertexBuffer, colorBuffer, indexBuffer, indexType, indexCount, wireIndexBuffer: null, wireIndexCount: 0 };
+  }
+
+  #createWireIndices(resource) {
+    const gl = this.gl;
+    const source = resource.drawable.indices?.array;
+    const triangleCount = resource.drawable.triangleCount;
+    const lines = new Uint32Array(triangleCount * 6);
+    for (let triangle = 0; triangle < triangleCount; triangle++) {
+      const a = source ? source[triangle * 3] : triangle * 3;
+      const b = source ? source[triangle * 3 + 1] : triangle * 3 + 1;
+      const c = source ? source[triangle * 3 + 2] : triangle * 3 + 2;
+      lines.set([a, b, b, c, c, a], triangle * 6);
+    }
+    resource.wireIndexBuffer = gl.createBuffer();
+    gl.bindVertexArray(resource.vao);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, resource.wireIndexBuffer);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, lines, gl.STATIC_DRAW);
+    resource.wireIndexCount = lines.length;
+    gl.bindVertexArray(null);
+  }
+
+  #createReferenceLines(bounds) {
+    const gl = this.gl;
+    const radius = Math.max(boundsRadius(bounds), 1);
+    const magnitude = 10 ** Math.floor(Math.log10(radius));
+    const step = magnitude / (radius / magnitude > 5 ? 1 : 2);
+    const extent = Math.ceil(radius * 1.5 / step) * step;
+    const center = boundsCenter(bounds);
+    const originX = Math.round(center[0] / step) * step;
+    const originY = Math.round(center[1] / step) * step;
+    const positions = [];
+    const colors = [];
+    const lineColor = [0.27, 0.30, 0.34, 0.5];
+    for (let i = -10; i <= 10; i++) {
+      const x = originX + i * extent / 10;
+      const y = originY + i * extent / 10;
+      positions.push(x, originY - extent, 0, x, originY + extent, 0, originX - extent, y, 0, originX + extent, y, 0);
+      for (let vertex = 0; vertex < 4; vertex++) colors.push(...lineColor);
+    }
+    const gridVertices = positions.length / 3;
+    const axisLength = Math.max(radius * 0.2, step);
+    positions.push(0, 0, 0, axisLength, 0, 0, 0, 0, 0, 0, axisLength, 0, 0, 0, 0, 0, 0, axisLength);
+    colors.push(1, .2, .16, 1, 1, .2, .16, 1, .2, 1, .35, 1, .2, 1, .35, 1, .25, .5, 1, 1, .25, .5, 1, 1);
+    const vao = gl.createVertexArray();
+    gl.bindVertexArray(vao);
+    const positionBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(positions), gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+    const colorBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, colorBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(colors), gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(1);
+    gl.vertexAttribPointer(1, 4, gl.FLOAT, false, 0, 0);
+    gl.bindVertexArray(null);
+    return { vao, positionBuffer, colorBuffer, gridVertices };
+  }
+
+  #disposeModel() {
+    const gl = this.gl;
+    for (const resource of this.resources) {
+      gl.deleteVertexArray(resource.vao);
+      gl.deleteBuffer(resource.vertexBuffer);
+      gl.deleteBuffer(resource.colorBuffer);
+      gl.deleteBuffer(resource.indexBuffer);
+      gl.deleteBuffer(resource.wireIndexBuffer);
+    }
+    if (this.lineResources) {
+      gl.deleteVertexArray(this.lineResources.vao);
+      gl.deleteBuffer(this.lineResources.positionBuffer);
+      gl.deleteBuffer(this.lineResources.colorBuffer);
+    }
+    this.resources = [];
+  }
+
+  #eyePosition() {
+    const cp = Math.cos(this.camera.pitch);
+    return v3.add(this.camera.target, [
+      Math.cos(this.camera.yaw) * cp * this.camera.distance,
+      Math.sin(this.camera.yaw) * cp * this.camera.distance,
+      Math.sin(this.camera.pitch) * this.camera.distance,
+    ]);
+  }
+
+  #updateMovement(delta) {
+    if (!this.keys.size || !this.model) return false;
+    const eye = this.#eyePosition();
+    const forward = v3.normalize(v3.sub(this.camera.target, eye));
+    const horizontalForward = v3.normalize([forward[0], forward[1], 0]);
+    const right = v3.normalize(v3.cross(horizontalForward, [0, 0, 1]));
+    let move = [0, 0, 0];
+    if (this.keys.has("w")) move = v3.add(move, horizontalForward);
+    if (this.keys.has("s")) move = v3.sub(move, horizontalForward);
+    if (this.keys.has("d")) move = v3.add(move, right);
+    if (this.keys.has("a")) move = v3.sub(move, right);
+    if (this.keys.has("e")) move[2] += 1;
+    if (this.keys.has("q")) move[2] -= 1;
+    if (v3.length(move) === 0) return false;
+    const speed = Math.max(this.camera.distance * 0.7, this.sceneRadius * 0.08);
+    this.camera.target = v3.add(this.camera.target, v3.scale(v3.normalize(move), speed * delta));
+    this.needsRender = true;
+    return true;
+  }
+
+  #installControls() {
+    let drag = null;
+    this.canvas.addEventListener("contextmenu", (event) => event.preventDefault());
+    this.canvas.addEventListener("pointerdown", (event) => {
+      this.canvas.focus();
+      this.canvas.setPointerCapture(event.pointerId);
+      drag = { x: event.clientX, y: event.clientY, mode: event.button === 0 && !event.shiftKey ? "orbit" : "pan" };
+      this.canvas.classList.add("dragging");
+    });
+    this.canvas.addEventListener("pointermove", (event) => {
+      if (!drag) return;
+      const dx = event.clientX - drag.x;
+      const dy = event.clientY - drag.y;
+      drag.x = event.clientX; drag.y = event.clientY;
+      if (drag.mode === "orbit") {
+        this.camera.yaw -= dx * 0.006;
+        this.camera.pitch = Math.max(-Math.PI * .48, Math.min(Math.PI * .48, this.camera.pitch + dy * 0.006));
+      } else {
+        const eye = this.#eyePosition();
+        const forward = v3.normalize(v3.sub(this.camera.target, eye));
+        const right = v3.normalize(v3.cross(forward, [0, 0, 1]));
+        const up = v3.normalize(v3.cross(right, forward));
+        const scale = (this.projection === "orthographic" ? this.camera.orthoSize : this.camera.distance) * 0.0025;
+        this.camera.target = v3.add(this.camera.target, v3.add(v3.scale(right, -dx * scale), v3.scale(up, dy * scale)));
+      }
+      this.requestRender();
+    });
+    const endDrag = () => { drag = null; this.canvas.classList.remove("dragging"); };
+    this.canvas.addEventListener("pointerup", endDrag);
+    this.canvas.addEventListener("pointercancel", endDrag);
+    this.canvas.addEventListener("wheel", (event) => {
+      event.preventDefault();
+      const factor = Math.exp(Math.sign(event.deltaY) * Math.min(Math.abs(event.deltaY), 200) * 0.0015);
+      this.camera.distance = Math.max(this.sceneRadius * 0.0005, this.camera.distance * factor);
+      this.camera.orthoSize = Math.max(this.sceneRadius * 0.0005, this.camera.orthoSize * factor);
+      this.requestRender();
+    }, { passive: false });
+    this.canvas.addEventListener("keydown", (event) => {
+      if (["w", "a", "s", "d", "q", "e"].includes(event.key.toLowerCase()) && !(event.shiftKey && event.key.toLowerCase() === "w")) {
+        this.keys.add(event.key.toLowerCase());
+        event.preventDefault();
+      }
+    });
+    this.canvas.addEventListener("keyup", (event) => this.keys.delete(event.key.toLowerCase()));
+    this.canvas.addEventListener("blur", () => this.keys.clear());
+  }
+}
+
+function createProgram(gl, vertexSource, fragmentSource) {
+  const compile = (type, source) => {
+    const shader = gl.createShader(type);
+    gl.shaderSource(shader, source);
+    gl.compileShader(shader);
+    if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(shader));
+    return shader;
+  };
+  const program = gl.createProgram();
+  gl.attachShader(program, compile(gl.VERTEX_SHADER, vertexSource));
+  gl.attachShader(program, compile(gl.FRAGMENT_SHADER, fragmentSource));
+  gl.linkProgram(program);
+  if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(program));
+  return program;
+}
+
+function uniformMatrix(gl, program, name, value) {
+  gl.uniformMatrix4fv(gl.getUniformLocation(program, name), false, value);
+}

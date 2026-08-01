@@ -1,6 +1,8 @@
 # Python env (
 # TODO: ignore rule should be more general)
 demo_env/
+.venv/
+.cs2-env/
 
 # Demo and output files
 *.dem

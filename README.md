@@ -23,7 +23,7 @@ python nvidia-warp-kimi.py match.dem --player "donk" --round 1 --start 0 --end 2
 Before running, install the dependencies and download Awpy geometry once:
 
 ```powershell
-pip install awpy trimesh numpy polars warp-lang
+pip install -r requirements.txt
 awpy get tris
 ```
 
@@ -71,3 +71,21 @@ python flash-coverage.py --flash-json flashes.json --flash-index 12 --out flash_
 The resulting GLB uses gray for no coverage, dark red for weak coverage, and light yellow for stronger coverage. Intensity is an occlusion-and-distance simulation, not Valve's exact blind-duration calculation. Both tools include progress bars; add `--verbose` for diagnostics or `--no-progress` for log-friendly operation.
 
 The GLB also includes a separate bright yellow object named `flash_detonation_marker` at the exact pop position, so it can be selected and focused in Blender.
+
+## Inspect GLB results locally
+
+The repository includes a dependency-free WebGL 2 viewer, so Blender is not required for routine inspection:
+
+```powershell
+python viewer.py out/seen_result.glb
+```
+
+You can also run `python viewer.py` and then open or drag a `.glb` into the browser window. The viewer provides:
+
+- GPU-rendered face colors with lit, flat-color, and normal views.
+- Orbit, pan, zoom, and WASD/QE movement with scene/object framing.
+- Named-object selection and visibility controls, including `flash_detonation_marker`.
+- Perspective/orthographic cameras, optional wireframe, grid and axes.
+- Triangle, vertex, file-size, bounds, camera, and frame-rate diagnostics.
+
+GLB remains the recommended export format. It already carries the analyzer's triangle geometry, RGBA colors, scene transforms, and named objects in one portable file; the viewer reads that data directly. A current Chrome, Edge, or Firefox browser with WebGL 2 is required. Everything is served on `127.0.0.1` and remains local to the machine.
