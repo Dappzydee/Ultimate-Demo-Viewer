@@ -31,6 +31,8 @@ This repository is a local CS2 demo-analysis application plus reusable command-l
 
 `viewer.py` owns the local HTTP API and background job state. The browser frontend never invokes a CLI subprocess and never requires a temporary GLB for an analysis. Geometry is loaded once; later results preserve its face order and update a dynamic GPU attribute.
 
+When CUDA is available, `WarpRaycaster` also owns a fused analysis path. Canonically ordered interior samples are uploaded once per sample-count setting. Vision kernels perform candidate filtering and face ray queries, retain cumulative per-sample state on the device, and atomically pack per-face results. Poses are queued in chunks before synchronization, so CUDA work is not serialized behind CPU array construction. Flash kernels similarly combine range filtering, ray queries, falloff, and per-face reduction. The generic `visible()` contract remains the correctness reference and CPU fallback; custom sample layouts automatically use that path.
+
 ## Time and replay contracts
 
 An instant vision analysis selects the nearest valid pose to the requested round-relative time. An interval samples ordered poses between its endpoints. Timeline output contains two packed face bitsets per frame: visibility at that frame and visibility accumulated from the interval start. This keeps playback compact and allows switching modes without rerunning raycasts.

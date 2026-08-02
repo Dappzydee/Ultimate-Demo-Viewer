@@ -59,12 +59,37 @@ class FlashCoverageAnalyzer:
             sample_points, sample_face_ids = interior_sample_points(mesh, config.samples_per_triangle)
         self.sample_points, self.sample_face_ids = sample_points, sample_face_ids
         self.raycaster = raycaster or create_raycaster(mesh, config.prefer_gpu)
+        expected_face_ids = np.arange(len(mesh.faces), dtype=np.int32)[:, None]
+        self._samples_are_face_ordered = (
+            len(sample_face_ids) == len(mesh.faces) * config.samples_per_triangle
+            and np.array_equal(
+                sample_face_ids.reshape(-1, config.samples_per_triangle),
+                np.broadcast_to(expected_face_ids, (len(mesh.faces), config.samples_per_triangle)),
+            )
+        )
 
     def analyze(
         self, flash: FlashDetonation, show_progress: bool = True,
         progress_callback: Callable[[int, int], None] | None = None,
     ) -> FlashCoverageResult:
         origin = np.asarray(flash.position, dtype=np.float64)
+        fused_analysis = getattr(self.raycaster, "analyze_flash", None)
+        if self._samples_are_face_ordered and callable(fused_analysis):
+            progress = ProgressBar(1, "Raycasting flash coverage", show_progress)
+            intensities, tested_rays = fused_analysis(
+                self.sample_points,
+                self.config.samples_per_triangle,
+                origin,
+                self.config.max_distance,
+                self.config.falloff_power,
+                self.config.ray_endpoint_epsilon,
+            )
+            progress.update(1)
+            progress.finish()
+            if progress_callback:
+                progress_callback(tested_rays, tested_rays or 1)
+            return FlashCoverageResult(intensities, tested_rays, self.raycaster.name)
+
         preparation = ProgressBar(2, "Preparing flash coverage", show_progress)
         preparation.update(0)
         offsets = self.sample_points - origin

@@ -14,6 +14,7 @@ import trimesh
 
 from cs2_visibility.analysis import VisibilityAnalyzer
 from cs2_visibility.flash_events import FlashDetonation
+from cs2_visibility.flash_coverage import FlashCoverageAnalyzer, FlashCoverageConfig
 from cs2_visibility.interchange import (
     decode_flash_intensities,
     decode_visibility_timeline,
@@ -29,6 +30,31 @@ class AllVisibleRaycaster:
 
     def visible(self, origins, directions, face_ids, lengths):
         return np.ones(len(face_ids), dtype=bool)
+
+
+class FusedRaycaster:
+    name = "fused-test"
+
+    def visible(self, origins, directions, face_ids, lengths):
+        raise AssertionError("The generic ray path should not run when fused analysis is available.")
+
+    def analyze_vision_timeline(
+        self, sample_points, samples_per_face, origins, forwards, max_distance,
+        cos_half_fov, endpoint_epsilon, min_visible_samples, progress_callback,
+    ):
+        progress_callback(1, 2)
+        progress_callback(2, 2)
+        return (
+            np.array([[1], [2]], dtype=np.uint8),
+            np.array([[1], [3]], dtype=np.uint8),
+            17,
+        )
+
+    def analyze_flash(
+        self, sample_points, samples_per_face, origin, max_distance,
+        falloff_power, endpoint_epsilon,
+    ):
+        return np.array([0.25, 0.75], dtype=np.float32), 11
 
 
 def synthetic_mesh() -> trimesh.Trimesh:
@@ -73,6 +99,38 @@ class VisibilityTimelineTests(unittest.TestCase):
         ))
         self.assertIsNone(legacy.positions)
         np.testing.assert_array_equal(legacy.final_mask, [True, True])
+
+    def test_fused_backend_bypasses_generic_ray_materialization(self) -> None:
+        raycaster = FusedRaycaster()
+        sample_points = np.array([[10, 0, 0], [0, 10, 0]], dtype=np.float64)
+        sample_faces = np.array([0, 1], dtype=np.int32)
+        analyzer = VisibilityAnalyzer(
+            synthetic_mesh(), AnalysisConfig(samples_per_triangle=1),
+            sample_points=sample_points, sample_face_ids=sample_faces, raycaster=raycaster,
+        )
+        progress = []
+        result = analyzer.analyze_timeline(
+            [
+                PlayerPose(100, np.zeros(3), 0, 0),
+                PlayerPose(104, np.zeros(3), 90, 0),
+            ],
+            show_progress=False,
+            progress_callback=lambda completed, total: progress.append((completed, total)),
+        )
+        np.testing.assert_array_equal(result.instant_masks, [[1], [2]])
+        np.testing.assert_array_equal(result.cumulative_masks, [[1], [3]])
+        self.assertEqual(result.tested_rays, 17)
+        self.assertEqual(result.backend, "fused-test")
+        self.assertEqual(progress, [(1, 2), (2, 2)])
+
+        flash_result = FlashCoverageAnalyzer(
+            synthetic_mesh(), FlashCoverageConfig(samples_per_triangle=1),
+            sample_points=sample_points, sample_face_ids=sample_faces, raycaster=raycaster,
+        ).analyze(
+            FlashDetonation(0, 100, (0, 0, 0), "de_test"), show_progress=False,
+        )
+        np.testing.assert_array_equal(flash_result.intensities, [0.25, 0.75])
+        self.assertEqual(flash_result.tested_rays, 11)
 
 
 class SessionArchiveTests(unittest.TestCase):

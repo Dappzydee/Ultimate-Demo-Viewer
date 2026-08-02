@@ -99,6 +99,14 @@ class VisibilityAnalyzer:
             sample_points, sample_face_ids = interior_sample_points(mesh, config.samples_per_triangle)
         self.sample_points, self.sample_face_ids = sample_points, sample_face_ids
         self.raycaster = raycaster or create_raycaster(mesh, config.prefer_gpu)
+        expected_face_ids = np.arange(len(mesh.faces), dtype=np.int32)[:, None]
+        self._samples_are_face_ordered = (
+            len(sample_face_ids) == len(mesh.faces) * config.samples_per_triangle
+            and np.array_equal(
+                sample_face_ids.reshape(-1, config.samples_per_triangle),
+                np.broadcast_to(expected_face_ids, (len(mesh.faces), config.samples_per_triangle)),
+            )
+        )
 
     @classmethod
     def from_tri_file(cls, tri_path: Path, config: AnalysisConfig) -> "VisibilityAnalyzer":
@@ -106,6 +114,19 @@ class VisibilityAnalyzer:
 
     def analyze(self, poses: Iterable[PlayerPose], show_progress: bool = True) -> VisibilityResult:
         """Batch raycasts from multiple ticks while maintaining per-face evidence."""
+        pose_list = list(poses)
+        if (
+            self._samples_are_face_ordered
+            and callable(getattr(self.raycaster, "analyze_vision_timeline", None))
+        ):
+            timeline = self.analyze_timeline(pose_list, show_progress=show_progress)
+            return VisibilityResult(
+                timeline.seen_mask,
+                timeline.processed_poses,
+                timeline.tested_rays,
+                timeline.backend,
+            )
+
         # Track individual sample locations, rather than incrementing an
         # unbounded count each tick. This is a real boolean mask: repeatedly
         # seeing the same small corner cannot satisfy a stricter threshold.
@@ -134,7 +155,6 @@ class VisibilityAnalyzer:
             pending_origins.clear(); pending_directions.clear(); pending_faces.clear(); pending_sample_ids.clear(); pending_lengths.clear()
             pending_count = 0
 
-        pose_list = list(poses)
         progress = ProgressBar(len(pose_list), "Raycasting player vision", show_progress)
         processed = 0
         for pose in pose_list:
@@ -171,6 +191,50 @@ class VisibilityAnalyzer:
         pose_list = list(poses)
         face_count = len(self.mesh.faces)
         packed_width = (face_count + 7) // 8
+
+        fused_analysis = getattr(self.raycaster, "analyze_vision_timeline", None)
+        if self._samples_are_face_ordered and callable(fused_analysis):
+            progress = ProgressBar(
+                len(pose_list), "Raycasting player vision timeline", show_progress,
+            )
+
+            def fused_progress(completed: int, total: int) -> None:
+                progress.update(completed)
+                if progress_callback:
+                    progress_callback(completed, total)
+
+            origins = np.asarray([pose.position for pose in pose_list], dtype=np.float64)
+            forwards = np.asarray([
+                forward_vector(pose.yaw_degrees, pose.pitch_degrees) for pose in pose_list
+            ], dtype=np.float64)
+            instant_masks, cumulative_masks, ray_count = fused_analysis(
+                self.sample_points,
+                self.config.samples_per_triangle,
+                origins,
+                forwards,
+                self.config.max_distance,
+                float(np.cos(np.radians(self.config.horizontal_fov_degrees / 2))),
+                self.config.ray_endpoint_epsilon,
+                self.config.min_visible_samples,
+                fused_progress,
+            )
+            progress.finish()
+            return VisibilityTimelineResult(
+                ticks=np.asarray([pose.tick for pose in pose_list], dtype=np.uint32),
+                instant_masks=instant_masks,
+                cumulative_masks=cumulative_masks,
+                face_count=face_count,
+                processed_poses=len(pose_list),
+                tested_rays=ray_count,
+                backend=self.raycaster.name,
+                positions=np.asarray([
+                    pose.origin_position if pose.origin_position is not None else pose.position
+                    for pose in pose_list
+                ], dtype=np.float32),
+                yaws=np.asarray([pose.yaw_degrees for pose in pose_list], dtype=np.float32),
+                pitches=np.asarray([pose.pitch_degrees for pose in pose_list], dtype=np.float32),
+            )
+
         instant_masks = np.zeros((len(pose_list), packed_width), dtype=np.uint8)
         cumulative_masks = np.zeros_like(instant_masks)
         cumulative_samples = np.zeros(len(self.sample_points), dtype=bool)

@@ -2,6 +2,16 @@
 
 All notable, explicitly versioned changes to this project are recorded here.
 
+## 0.5.0 - 2026-08-03 - Fused CUDA analysis
+
+- Moved vision candidate filtering, raycasting, cumulative sample tracking, face reduction, and bit packing into fused NVIDIA Warp kernels.
+- Moved flash range filtering, raycasting, falloff, and face reduction into a fused GPU kernel.
+- Kept static face samples and cumulative visibility state in GPU memory and queued vision poses in chunks to eliminate per-ray host transfers and per-pose synchronization.
+- Preserved the generic raycasting path as the CPU fallback and correctness reference, including automatic fallback for custom sample layouts.
+- Matched the archived 173,385,654-ray vision result byte-for-byte and matched reference flash intensities without reducing any accuracy setting.
+- Improved the measured 32-pose Dust II workload from 5.783 seconds to 0.301 seconds (19.2x) while sustaining 98-100% GPU SM utilization on an RTX 3060 Ti.
+- Added fused-path routing tests and CUDA/reference equivalence coverage; all 11 automated tests pass.
+
 ## 0.4.0 - 2026-08-02 - Player replay and analysis history
 
 - Added a toggleable player position marker and facing arrow that follow Vision replay frames.
