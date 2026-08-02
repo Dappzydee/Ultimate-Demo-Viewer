@@ -22,7 +22,6 @@ const appState = {
   manualFlashPosition: null,
   flashCamera: false,
   resultHistory: null,
-  sessionResultIds: new Set(),
   flashMover: {
     enabled: false,
     moving: false,
@@ -32,7 +31,6 @@ const appState = {
     previewInFlight: false,
     pendingPosition: null,
     debounceTimer: null,
-    settleTimer: null,
     animationFrame: null,
     lastFrameTime: 0,
     epoch: 0,
@@ -66,13 +64,7 @@ bindFileInput("#session-input", loadSessionFile);
 bindFileInput("#file-input", loadGlbFile);
 
 $("#save-session-button").addEventListener("click", () => {
-  const available = new Set(appState.results.map((result) => result.id));
-  const selected = [...appState.sessionResultIds].filter((resultId) => available.has(resultId));
-  if (!selected.length && appState.activeResult) selected.push(appState.activeResult.id);
-  const parameters = new URLSearchParams();
-  for (const resultId of selected) parameters.append("result", resultId);
-  const query = parameters.size ? `?${parameters}` : "";
-  download(`/api/session/export.cs2session${query}`);
+  download("/api/session/export.cs2session");
 });
 $("#export-button").addEventListener("click", () => {
   if (!appState.activeResult) return;
@@ -130,6 +122,10 @@ $("#focus-flash-toggle").addEventListener("change", () => {
   if ($("#focus-flash-toggle").checked && appState.analysisType === "flash" && !appState.flashCamera) focusSelectedFlash();
 });
 $("#flash-camera-button").addEventListener("click", () => setFlashCameraMode(!appState.flashCamera));
+$("#placed-flash-origin").addEventListener("change", (event) => copyDemoFlashPosition(Number(event.target.value)));
+$("#copy-flash-position-button").addEventListener("click", () => {
+  copyDemoFlashPosition(Number($("#placed-flash-origin").value));
+});
 $("#move-flash-button").addEventListener("click", () => setMoveFlashMode(!appState.flashMover.enabled));
 $("#analyze-vision-button").addEventListener("click", () => analyzeCurrentSelection("vision"));
 $("#analyze-flash-button").addEventListener("click", () => analyzeCurrentSelection("flash"));
@@ -224,7 +220,6 @@ async function uploadAndLoad(file, endpoint, title) {
   setFlashCameraMode(false);
   clearActiveResult();
   appState.manualFlashPosition = null;
-  appState.sessionResultIds.clear();
   setLoading(true, title, `${file.name} · ${formatBytes(file.size)}`, 0);
   try {
     const job = await apiJson(endpoint, {
@@ -247,16 +242,13 @@ async function refreshApplicationState(loadGeometry = false, loadLatestResult = 
   appState.session = state.session;
   appState.results = state.results || [];
   appState.resultHistory = state.resultHistory || null;
-  if (loadGeometry) appState.sessionResultIds.clear();
-  const availableResultIds = new Set(appState.results.map((result) => result.id));
-  for (const resultId of appState.sessionResultIds) {
-    if (!availableResultIds.has(resultId)) appState.sessionResultIds.delete(resultId);
-  }
   if (!appState.session) return;
   if (loadGeometry || !hadSession) installSessionControls();
   if (loadGeometry) await loadUrl("/api/geometry.glb", appState.session.mapName);
   renderHistory();
-  const savedResult = loadLatestResult ? appState.results.at(-1) : null;
+  const savedResult = loadLatestResult
+    ? [...appState.results].reverse().find((result) => !result.discarded)
+    : null;
   if (savedResult) await loadResult(savedResult.id);
 }
 
@@ -343,7 +335,51 @@ function populateFlashes() {
     empty.textContent = "No flash detonations were found in this demo.";
     list.append(empty);
   }
+  populatePlacedFlashOrigins(flashes);
   previewSelectedFlash();
+}
+
+function populatePlacedFlashOrigins(flashes) {
+  const select = $("#placed-flash-origin");
+  select.replaceChildren();
+  const groups = groupBy(flashes, (flash) => flash.thrower_team || flash.thrower_side || "Unknown team");
+  for (const [team, values] of groups) {
+    const group = document.createElement("optgroup");
+    group.label = displayTeam(team);
+    for (const flash of values) {
+      const round = appState.session.rounds.find((item) => item.number === flash.round_number);
+      const seconds = round ? (flash.tick - round.freezeEndTick) / appState.session.tickRate : 0;
+      group.append(option(flash.index, `R${flash.round_number ?? "?"} · ${formatTime(seconds)} · ${flash.thrower || "Unknown player"}`));
+    }
+    select.append(group);
+  }
+  if (!flashes.length) {
+    const empty = option("", "No recorded flash pops");
+    empty.disabled = true;
+    select.append(empty);
+  } else {
+    select.value = String(appState.selectedFlashIndex ?? flashes[0].index);
+  }
+  select.disabled = !flashes.length;
+  $("#copy-flash-position-button").disabled = !flashes.length;
+}
+
+function copyDemoFlashPosition(index) {
+  const flash = appState.session?.flashes.find((item) => item.index === index);
+  if (!flash) return;
+  stopFlashMovement();
+  const mover = appState.flashMover;
+  mover.revision++;
+  mover.lastAppliedRevision = mover.revision;
+  mover.pendingPosition = null;
+  clearTimeout(mover.debounceTimer);
+  mover.debounceTimer = null;
+  if (mover.previewVisible) restoreActiveVisualization();
+  mover.previewVisible = false;
+  setManualPosition(positionArray(flash.position));
+  renderer.focusPoint(appState.manualFlashPosition);
+  setMoveFlashStatus(`Copied ${flash.thrower || "demo flash"} at R${flash.round_number ?? "?"}. Move it or click Analyze flash.`);
+  canvas.focus();
 }
 
 function selectFlash(index) {
@@ -500,9 +536,7 @@ function setMoveFlashMode(enabled) {
   mover.lastAppliedRevision = 0;
   mover.pendingPosition = null;
   clearTimeout(mover.debounceTimer);
-  clearTimeout(mover.settleTimer);
   mover.debounceTimer = null;
-  mover.settleTimer = null;
   if (mover.animationFrame !== null) cancelAnimationFrame(mover.animationFrame);
   mover.animationFrame = null;
   const button = $("#move-flash-button");
@@ -539,8 +573,6 @@ function beginFlashMovement(key, fast) {
   const mover = appState.flashMover;
   mover.keys.add(key);
   mover.fast = Boolean(fast);
-  clearTimeout(mover.settleTimer);
-  mover.settleTimer = null;
   if (mover.animationFrame === null) {
     mover.lastFrameTime = 0;
     mover.animationFrame = requestAnimationFrame(moveFlashFrame);
@@ -561,10 +593,7 @@ function stopFlashMovement() {
   mover.animationFrame = null;
   if (!mover.enabled || !mover.moving || mover.finalizing) return;
   mover.moving = false;
-  clearTimeout(mover.settleTimer);
-  const epoch = mover.epoch;
-  mover.settleTimer = setTimeout(() => finalizeFlashMovement(epoch), 350);
-  setMoveFlashStatus("Movement stopped; preparing the full-quality result…");
+  setMoveFlashStatus("Position ready. Click Analyze flash when you want the full-quality result.");
 }
 
 function moveFlashFrame(time) {
@@ -625,7 +654,7 @@ async function runFlashMovePreview() {
     if (!response.ok) throw new Error("Could not load the live flash preview.");
     const buffer = await response.arrayBuffer();
     if (
-      mover.enabled && mover.moving && !mover.finalizing &&
+      mover.enabled && !mover.finalizing &&
       pending.epoch === mover.epoch && pending.revision > mover.lastAppliedRevision
     ) {
       mover.lastAppliedRevision = pending.revision;
@@ -635,7 +664,7 @@ async function runFlashMovePreview() {
     if (pending.epoch === mover.epoch && mover.enabled) showError(error);
   } finally {
     mover.previewInFlight = false;
-    if (mover.enabled && mover.moving && !mover.finalizing && mover.pendingPosition) {
+    if (mover.enabled && !mover.finalizing && mover.pendingPosition) {
       mover.debounceTimer = setTimeout(() => runFlashMovePreview(), 180);
     }
   }
@@ -647,47 +676,10 @@ function installFlashMovePreview(buffer, position) {
   renderer.setFaceValues(new Uint8Array(buffer, 24, header.faceCount), "flash");
   renderer.setMarker(position);
   appState.flashMover.previewVisible = true;
-  setMoveFlashStatus("Quick preview shown. Keep moving, or release the keys for full quality.");
+  setMoveFlashStatus(appState.flashMover.moving
+    ? "Quick preview shown. Keep moving, or release the keys to hold this position."
+    : "Quick preview ready. Click Analyze flash for the full-quality result.");
   $("#status-summary").textContent = `Moving flash preview · ${formatNumber(header.faceCount)} faces · 1 sample`;
-}
-
-async function finalizeFlashMovement(epoch) {
-  const mover = appState.flashMover;
-  mover.settleTimer = null;
-  if (!mover.enabled || mover.finalizing || mover.keys.size || epoch !== mover.epoch) return;
-  const position = manualPosition(false);
-  if (!position) {
-    setMoveFlashStatus("The placed flash has no valid position.");
-    return;
-  }
-  mover.finalizing = true;
-  mover.revision++;
-  mover.pendingPosition = null;
-  clearTimeout(mover.debounceTimer);
-  mover.debounceTimer = null;
-  setMoveFlashStatus(`Calculating full-quality result (${Number($("#flash-samples").value)} samples per triangle)…`);
-  try {
-    while (mover.previewInFlight && mover.enabled && epoch === mover.epoch) {
-      await new Promise((resolve) => setTimeout(resolve, 50));
-    }
-    if (!mover.enabled || epoch !== mover.epoch) return;
-    setLoading(true, "Analyzing flash coverage", "Running full-quality pass", 0);
-    const job = await apiJson("/api/analyze/flash", {
-      method: "POST",
-      body: JSON.stringify(flashAnalysisRequest(position)),
-    });
-    const completed = await waitForJob(job.id);
-    if (!mover.enabled || epoch !== mover.epoch) return;
-    await refreshApplicationState(false);
-    await loadResult(completed.resultId);
-    mover.previewVisible = false;
-    setMoveFlashStatus("Full-quality result ready. Use WASD/QE to move it again.");
-  } catch (error) {
-    if (epoch === mover.epoch) showError(error);
-  } finally {
-    setLoading(false);
-    if (epoch === mover.epoch) mover.finalizing = false;
-  }
 }
 
 function flashAnalysisRequest(position, samplesPerTriangle = Number($("#flash-samples").value)) {
@@ -719,9 +711,25 @@ function ensureManualFlashPosition() {
   return appState.manualFlashPosition;
 }
 
+async function prepareFlashMoverForAnalysis() {
+  const mover = appState.flashMover;
+  stopFlashMovement();
+  mover.finalizing = true;
+  mover.revision++;
+  mover.lastAppliedRevision = mover.revision;
+  mover.pendingPosition = null;
+  clearTimeout(mover.debounceTimer);
+  mover.debounceTimer = null;
+  if (mover.previewInFlight) {
+    setLoading(true, "Analyzing flash coverage", "Finishing the quick preview", 0);
+    while (mover.previewInFlight) await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+}
+
 async function analyzeCurrentSelection(type) {
   if (!appState.session) return;
   const isVision = type === "vision";
+  let completedFlashAnalysis = false;
   try {
     let endpoint;
     let request;
@@ -751,15 +759,25 @@ async function analyzeCurrentSelection(type) {
           samplesPerTriangle: Number($("#flash-samples").value),
         };
     }
+    if (!isVision) await prepareFlashMoverForAnalysis();
     setLoading(true, isVision ? "Analyzing player vision" : "Analyzing flash coverage", "Preparing rays", 0);
     const job = await apiJson(endpoint, { method: "POST", body: JSON.stringify(request) });
     const completed = await waitForJob(job.id);
     await refreshApplicationState(false);
     await loadResult(completed.resultId);
+    completedFlashAnalysis = !isVision;
   } catch (error) {
     showError(error);
   } finally {
     setLoading(false);
+    if (!isVision) {
+      appState.flashMover.finalizing = false;
+      if (appState.flashMover.enabled) {
+        setMoveFlashStatus(completedFlashAnalysis
+          ? "Full-quality result ready. Move the flash again or analyze another position."
+          : "Position ready. Click Analyze flash when you want the full-quality result.");
+      }
+    }
   }
 }
 
@@ -924,31 +942,27 @@ function renderHistory() {
   warning.hidden = !history?.warning;
   warning.textContent = history?.warning || "";
 
-  const list = $("#history-list");
+  const activeResults = appState.results.filter((result) => !result.discarded);
+  const discardedResults = appState.results.filter((result) => result.discarded);
+  renderHistoryRows($("#history-list"), activeResults, false);
+  renderHistoryRows($("#discarded-history-list"), discardedResults, true);
+  $("#discarded-history-count").textContent = String(discardedResults.length);
+}
+
+function renderHistoryRows(list, results, discarded) {
   list.replaceChildren();
-  if (!appState.results.length) {
+  if (!results.length) {
     const empty = document.createElement("div");
     empty.className = "empty-copy";
-    empty.textContent = "Completed analyses will appear here.";
+    empty.textContent = discarded ? "Nothing discarded." : "Completed analyses will appear here.";
     list.append(empty);
     return;
   }
-  for (const result of [...appState.results].reverse()) {
+  for (const result of [...results].reverse()) {
     const row = document.createElement("div");
     row.className = `history-row${appState.activeResult?.id === result.id ? " active" : ""}`;
     const main = document.createElement("div");
     main.className = "history-main";
-
-    const include = document.createElement("input");
-    include.type = "checkbox";
-    include.className = "history-save";
-    include.checked = appState.sessionResultIds.has(result.id);
-    include.title = "Include this result in Save session";
-    include.setAttribute("aria-label", "Include result in saved session");
-    include.addEventListener("change", () => {
-      if (include.checked) appState.sessionResultIds.add(result.id);
-      else appState.sessionResultIds.delete(result.id);
-    });
 
     const copy = document.createElement("div");
     copy.className = "history-copy";
@@ -959,15 +973,17 @@ function renderHistory() {
     meta.className = "history-meta";
     meta.textContent = `${historyResultMeta(result)} · ${formatBytes(result.sizeBytes)}`;
     copy.append(title, meta);
-
-    const pin = document.createElement("button");
-    pin.className = `history-pin${result.pinned ? " active" : ""}`;
-    pin.textContent = result.pinned ? "◆" : "◇";
-    pin.title = result.pinned ? "Unpin result" : "Pin result";
-    pin.setAttribute("aria-label", pin.title);
-    pin.setAttribute("aria-pressed", String(result.pinned));
-    pin.addEventListener("click", () => setResultPinned(result.id, !result.pinned));
-    main.append(include, copy, pin);
+    main.append(copy);
+    if (!discarded) {
+      const pin = document.createElement("button");
+      pin.className = `history-pin${result.pinned ? " active" : ""}`;
+      pin.textContent = result.pinned ? "◆" : "◇";
+      pin.title = result.pinned ? "Unpin result" : "Pin result";
+      pin.setAttribute("aria-label", pin.title);
+      pin.setAttribute("aria-pressed", String(result.pinned));
+      pin.addEventListener("click", () => setResultPinned(result.id, !result.pinned));
+      main.append(pin);
+    }
 
     const actions = document.createElement("div");
     actions.className = "history-actions";
@@ -978,16 +994,27 @@ function renderHistory() {
     const exportButton = document.createElement("button");
     exportButton.textContent = "Export GLB";
     exportButton.addEventListener("click", () => exportHistoryResult(result));
-    const rename = document.createElement("button");
-    rename.textContent = "Rename";
-    rename.addEventListener("click", () => renameHistoryResult(result));
-    const remove = document.createElement("button");
-    remove.className = "history-delete";
-    remove.textContent = "×";
-    remove.title = "Delete result";
-    remove.setAttribute("aria-label", "Delete result");
-    remove.addEventListener("click", () => deleteHistoryResult(result.id));
-    actions.append(open, exportButton, rename, remove);
+    if (discarded) {
+      const restore = document.createElement("button");
+      restore.className = "history-restore";
+      restore.textContent = "Restore";
+      restore.addEventListener("click", () => setResultDiscarded(result.id, false));
+      const remove = document.createElement("button");
+      remove.className = "history-delete";
+      remove.textContent = "Delete";
+      remove.title = "Permanently delete result";
+      remove.addEventListener("click", () => deleteHistoryResult(result.id, true));
+      actions.append(open, exportButton, restore, remove);
+    } else {
+      const rename = document.createElement("button");
+      rename.textContent = "Rename";
+      rename.addEventListener("click", () => renameHistoryResult(result));
+      const discard = document.createElement("button");
+      discard.className = "history-discard";
+      discard.textContent = "Discard";
+      discard.addEventListener("click", () => setResultDiscarded(result.id, true));
+      actions.append(open, exportButton, rename, discard);
+    }
     row.append(main, actions);
     list.append(row);
   }
@@ -1041,16 +1068,33 @@ async function setResultPinned(resultId, pinned) {
   }
 }
 
-async function deleteHistoryResult(resultId) {
+async function setResultDiscarded(resultId, discarded) {
+  try {
+    await apiJson(`/api/results/${resultId}/discard`, {
+      method: "POST", body: JSON.stringify({ discarded }),
+    });
+    await refreshApplicationState(false);
+    if (appState.activeResult?.id === resultId) {
+      appState.activeResult = appState.results.find((item) => item.id === resultId) || appState.activeResult;
+      renderResultDetails(appState.activeResult);
+      renderHistory();
+    }
+  } catch (error) {
+    showError(error);
+  }
+}
+
+async function deleteHistoryResult(resultId, permanent = false) {
+  if (permanent && !window.confirm("Permanently delete this discarded analysis? This cannot be undone.")) return;
   try {
     await apiJson(`/api/results/${resultId}/delete`, {
       method: "POST", body: JSON.stringify({}),
     });
     const wasActive = appState.activeResult?.id === resultId;
-    appState.sessionResultIds.delete(resultId);
     if (wasActive) clearActiveResult();
     await refreshApplicationState(false);
-    if (wasActive && appState.results.length) await loadResult(appState.results.at(-1).id);
+    const latestActive = [...appState.results].reverse().find((result) => !result.discarded);
+    if (wasActive && latestActive) await loadResult(latestActive.id);
   } catch (error) {
     showError(error);
   }

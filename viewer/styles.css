@@ -84,8 +84,7 @@ summary { color: var(--muted); cursor: pointer; font-size: 11px; }
 .history-list { display: grid; gap: 6px; }
 .history-row { padding: 8px; border: 1px solid var(--line); border-radius: 5px; background: #14181d; }
 .history-row.active { border-color: #9e6a25; box-shadow: inset 3px 0 var(--accent); }
-.history-main { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: start; gap: 7px; }
-.history-save { width: 14px; height: 14px; margin: 2px 0 0; accent-color: var(--accent); }
+.history-main { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 7px; }
 .history-copy { min-width: 0; }
 .history-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #dce2e8; font-weight: 650; }
 .history-meta { margin-top: 2px; color: var(--muted); font-size: 10px; line-height: 1.35; }
@@ -93,8 +92,12 @@ summary { color: var(--muted); cursor: pointer; font-size: 11px; }
 .history-pin.active { background: transparent; border: 0; color: #ffd06f; }
 .history-actions { display: grid; grid-template-columns: 1fr 1fr 1fr 28px; gap: 5px; margin-top: 7px; }
 .history-actions button { min-height: 25px; padding: 3px 6px; font-size: 10px; }
+.history-discard { color: #ffd08c; }
+.history-restore { color: #9fe0bd; }
 .history-delete { color: #ef9a9a; }
 .history-help { margin: 8px 0 0; color: var(--muted); font-size: 10px; line-height: 1.4; }
+.discarded-history-box { margin-top: 12px; padding: 9px; border: 1px dashed #45505b; border-radius: 5px; background: #11151a; }
+.discarded-history-box h2 { margin-bottom: 8px; }
 
 .text-button { border: 0; background: transparent; color: var(--accent); padding: 0; min-height: auto; font-size: 11px; }
 .text-button:hover:not(:disabled) { background: transparent; color: #ffc16f; }

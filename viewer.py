@@ -45,6 +45,7 @@ class StoredResult:
     data: bytes
     cache_key: str | None = None
     pinned: bool = False
+    discarded: bool = False
     created_at: float = field(default_factory=time.time)
 
     def public_metadata(self) -> dict[str, Any]:
@@ -55,6 +56,7 @@ class StoredResult:
             "sizeBytes": len(self.data),
             "createdAt": self.created_at,
             "pinned": self.pinned,
+            "discarded": self.discarded,
         }
 
 
@@ -120,7 +122,10 @@ class ApplicationState:
 
     def _cached_job(self, kind: str, cache_key: str) -> AnalysisJob | None:
         with self.lock:
-            cached = next((result for result in self.results.values() if result.cache_key == cache_key), None)
+            cached = next((
+                result for result in self.results.values()
+                if result.cache_key == cache_key and not result.discarded
+            ), None)
             if cached is None:
                 return None
             job = AnalysisJob(
@@ -164,6 +169,17 @@ class ApplicationState:
             result = self.get_result(result_id)
             result.pinned = bool(pinned)
             if not result.pinned:
+                self._evict_results()
+            return result
+
+    def set_result_discarded(self, result_id: str, discarded: bool) -> StoredResult:
+        with self.lock:
+            result = self.results.get(result_id)
+            if result is None:
+                raise ValueError("Analysis result was not found.")
+            result.discarded = bool(discarded)
+            if result.discarded:
+                result.pinned = False
                 self._evict_results()
             return result
 
@@ -238,12 +254,13 @@ class ApplicationState:
                 analysis_type = str(metadata.pop("analysisType"))
                 metadata.pop("id", None)
                 pinned = bool(metadata.pop("pinned", False))
+                discarded = bool(metadata.pop("discarded", False))
                 created_at = float(metadata.pop("createdAt", time.time()))
                 metadata.pop("sizeBytes", None)
                 result_id = uuid.uuid4().hex
                 self.results[result_id] = StoredResult(
                     result_id, analysis_type, metadata, saved_data,
-                    pinned=pinned, created_at=created_at,
+                    pinned=pinned, discarded=discarded, created_at=created_at,
                 )
             self._evict_results()
 
@@ -409,11 +426,13 @@ class ApplicationState:
 
     def export_session(self, result_ids: list[str] | None) -> bytes:
         session = self._require_session()
-        if not result_ids:
-            return session.to_archive()
+        if result_ids is None:
+            result_ids = [result.id for result in self.results.values() if not result.discarded]
         analyses = []
         for result_id in dict.fromkeys(result_ids):
-            result = self.get_result(result_id)
+            result = self.results.get(result_id)
+            if result is None or result.discarded:
+                continue
             analyses.append((result.public_metadata(), result.data))
         return session.to_archive(analyses=analyses)
 
@@ -529,6 +548,13 @@ class ViewerRequestHandler(BaseHTTPRequestHandler):
                 result_id = path.removeprefix("/api/results/").removesuffix("/pin").strip("/")
                 result = self.server.app_state.set_result_pinned(
                     result_id, bool(self._read_json().get("pinned", True)),
+                )
+                self._send_json(result.public_metadata())
+                return
+            if path.startswith("/api/results/") and path.endswith("/discard"):
+                result_id = path.removeprefix("/api/results/").removesuffix("/discard").strip("/")
+                result = self.server.app_state.set_result_discarded(
+                    result_id, bool(self._read_json().get("discarded", True)),
                 )
                 self._send_json(result.public_metadata())
                 return

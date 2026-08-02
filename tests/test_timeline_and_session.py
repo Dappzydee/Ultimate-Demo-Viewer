@@ -177,6 +177,14 @@ class SessionArchiveTests(unittest.TestCase):
             self.assertEqual(len(decode_flash_intensities(flash_result.data)), 2)
             self.assertEqual(state.export_result_glb(flash_job.result_id, "cumulative", None)[:4], b"glTF")
 
+            saved_all = DemoSession.from_archive_bytes(state.export_session(None))
+            self.assertEqual(len(saved_all.saved_analyses), 2)
+            discarded = state.set_result_discarded(flash_job.result_id, True)
+            self.assertTrue(discarded.public_metadata()["discarded"])
+            saved_without_discarded = DemoSession.from_archive_bytes(state.export_session(None))
+            self.assertEqual(len(saved_without_discarded.saved_analyses), 1)
+            state.set_result_discarded(flash_job.result_id, False)
+
             history_ids = set(state.results)
             preview_job = state.start_flash({
                 "position": [2, 3, 4], "maxDistance": 30,
@@ -215,6 +223,10 @@ class SessionArchiveTests(unittest.TestCase):
             self.assertEqual(renamed.public_metadata()["name"], "Useful flash")
             state.set_result_pinned("1", True)
             self.assertTrue(state.get_result("1").pinned)
+            state.set_result_discarded("1", True)
+            self.assertTrue(state.get_result("1").discarded)
+            self.assertFalse(state.get_result("1").pinned)
+            state.set_result_discarded("1", False)
             state.delete_result("1")
             self.assertNotIn("1", state.results)
         finally:

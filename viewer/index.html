@@ -113,6 +113,11 @@
                     <div id="flash-event-list" class="flash-event-list" role="listbox" aria-label="Recorded flashes"></div>
                   </div>
                   <div id="manual-flash-controls" hidden>
+                    <label class="field">Start from demo flash
+                      <select id="placed-flash-origin"></select>
+                    </label>
+                    <button id="copy-flash-position-button" class="wide-button">Copy pop position</button>
+                    <span class="hint">Choosing a pop copies its position into the movable flash.</span>
                     <button id="move-flash-button" class="wide-button" aria-pressed="false">Move flash</button>
                     <span id="move-flash-status" class="hint">Enable movement, then use WASD to move and Q/E to change height. Hold Shift to move faster.</span>
                   </div>
@@ -144,7 +149,15 @@
             </div>
             <div id="history-warning" class="history-warning" hidden></div>
             <div id="history-list" class="history-list"></div>
-            <p class="history-help">Check results to include them in Save session. If none are checked, the current result is saved.</p>
+            <p class="history-help">Every result above is included automatically when you Save session.</p>
+            <div class="discarded-history-box">
+              <div class="section-heading">
+                <h2>Discarded history items</h2>
+                <span id="discarded-history-count" class="history-usage">0</span>
+              </div>
+              <div id="discarded-history-list" class="history-list"></div>
+              <p class="history-help">Discarded results stay in memory but are excluded from saved sessions. Restore or delete them permanently.</p>
+            </div>
           </section>
 
           <section>
