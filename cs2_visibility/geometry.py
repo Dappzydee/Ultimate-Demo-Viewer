@@ -65,9 +65,17 @@ def forward_vector(yaw_degrees: float, pitch_degrees: float) -> np.ndarray:
 
 def export_glb(mesh: trimesh.Trimesh | trimesh.Scene, output_path: Path) -> None:
     """Export GLB while supporting older Trimesh releases on NumPy 2.x."""
+    output_path.write_bytes(export_glb_bytes(mesh))
+
+
+def export_glb_bytes(mesh: trimesh.Trimesh | trimesh.Scene) -> bytes:
+    """Return an in-memory GLB while containing the NumPy compatibility fix."""
     # Older Trimesh releases call ndarray.ptp(), removed by NumPy 2.0, through
     # this helper when constructing glTF scene transforms. Replacing only that
     # helper keeps the compatibility workaround contained at the export seam.
     if not hasattr(np.ndarray, "ptp"):
         trimesh.util.allclose = lambda first, second, atol=1e-8: bool(np.allclose(first, second, atol=atol))
-    mesh.export(output_path)
+    payload = mesh.export(file_type="glb")
+    if not isinstance(payload, bytes):
+        raise TypeError("Trimesh did not return a binary GLB payload.")
+    return payload

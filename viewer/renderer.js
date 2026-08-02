@@ -4,16 +4,19 @@ const VERTEX_SHADER = `#version 300 es
 precision highp float;
 layout(location=0) in vec3 a_position;
 layout(location=1) in vec4 a_color;
+layout(location=2) in float a_resultValue;
 uniform mat4 u_viewProjection;
 uniform mat4 u_model;
 uniform vec4 u_baseColor;
 uniform bool u_hasColor;
 out vec4 v_color;
 out vec3 v_worldPosition;
+flat out float v_resultValue;
 void main() {
   vec4 world = u_model * vec4(a_position, 1.0);
   v_worldPosition = world.xyz;
   v_color = (u_hasColor ? a_color : vec4(1.0)) * u_baseColor;
+  v_resultValue = a_resultValue;
   gl_Position = u_viewProjection * world;
 }`;
 
@@ -21,7 +24,9 @@ const FRAGMENT_SHADER = `#version 300 es
 precision highp float;
 in vec4 v_color;
 in vec3 v_worldPosition;
+flat in float v_resultValue;
 uniform int u_shading;
+uniform int u_resultMode;
 uniform float u_exposure;
 uniform bool u_selected;
 uniform bool u_wirePass;
@@ -37,7 +42,15 @@ void main() {
   if (u_shading == 2) {
     color = normal * 0.5 + 0.5;
   } else {
-    color = v_color.rgb;
+    if (u_resultMode == 1) {
+      color = mix(vec3(0.627), vec3(1.0, 0.0, 0.0), step(0.5, v_resultValue));
+    } else if (u_resultMode == 2) {
+      color = v_resultValue <= 0.0
+        ? vec3(0.627)
+        : mix(vec3(0.39, 0.0, 0.0), vec3(1.0, 0.96, 0.31), v_resultValue);
+    } else {
+      color = v_color.rgb;
+    }
     if (u_shading == 0) {
       vec3 light = normalize(vec3(0.38, -0.46, 0.80));
       float diffuse = max(dot(normal, light), 0.0);
@@ -76,6 +89,7 @@ export class ViewerRenderer {
     this.lineProgram = createProgram(this.gl, LINE_VERTEX_SHADER, LINE_FRAGMENT_SHADER);
     this.model = null;
     this.resources = [];
+    this.markerResource = null;
     this.selectedId = null;
     this.shading = 0;
     this.exposure = 1;
@@ -102,6 +116,99 @@ export class ViewerRenderer {
     this.lineResources = this.#createReferenceLines(model.bounds);
     this.selectedId = null;
     this.frameBounds(model.bounds, true);
+  }
+
+  setFaceValues(faceValues, mode) {
+    const resource = this.resources.find((item) => item.drawable.triangleCount === faceValues.length);
+    if (!resource) throw new Error(`Result has ${faceValues.length} faces, but the loaded map does not.`);
+    const source = resource.drawable.indices?.array;
+    const values = resource.resultArray;
+    for (let face = 0; face < faceValues.length; face++) {
+      const value = faceValues[face];
+      if (source) {
+        values[source[face * 3]] = value;
+        values[source[face * 3 + 1]] = value;
+        values[source[face * 3 + 2]] = value;
+      } else {
+        const base = face * 3;
+        values[base] = value;
+        values[base + 1] = value;
+        values[base + 2] = value;
+      }
+    }
+    const gl = this.gl;
+    gl.bindBuffer(gl.ARRAY_BUFFER, resource.resultBuffer);
+    gl.bufferSubData(gl.ARRAY_BUFFER, 0, values);
+    resource.resultMode = mode === "flash" ? 2 : 1;
+    this.requestRender();
+  }
+
+  clearFaceValues() {
+    for (const resource of this.resources) {
+      resource.resultArray.fill(0);
+      this.gl.bindBuffer(this.gl.ARRAY_BUFFER, resource.resultBuffer);
+      this.gl.bufferSubData(this.gl.ARRAY_BUFFER, 0, resource.resultArray);
+      resource.resultMode = 0;
+    }
+    this.requestRender();
+  }
+
+  setMarker(position, radius = 24) {
+    if (this.markerResource) this.#disposeResource(this.markerResource);
+    this.markerResource = null;
+    if (!position) { this.requestRender(); return; }
+    const [x, y, z] = position;
+    const points = {
+      top: [x, y, z + radius], bottom: [x, y, z - radius],
+      east: [x + radius, y, z], west: [x - radius, y, z],
+      north: [x, y + radius, z], south: [x, y - radius, z],
+    };
+    const triangles = [
+      [points.top, points.east, points.north], [points.top, points.north, points.west],
+      [points.top, points.west, points.south], [points.top, points.south, points.east],
+      [points.bottom, points.north, points.east], [points.bottom, points.west, points.north],
+      [points.bottom, points.south, points.west], [points.bottom, points.east, points.south],
+    ];
+    const positions = new Float32Array(triangles.flat(2));
+    const colors = new Uint8Array((positions.length / 3) * 4);
+    for (let i = 0; i < colors.length; i += 4) colors.set([255, 238, 35, 255], i);
+    const drawable = {
+      id: "analysis-marker", name: "Analysis marker",
+      position: { array: positions, count: positions.length / 3, components: 3, componentType: 5126, normalized: false },
+      color: { array: colors, count: positions.length / 3, components: 4, componentType: 5121, normalized: true },
+      indices: null,
+      worldMatrix: new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]),
+      bounds: { min: [x - radius, y - radius, z - radius], max: [x + radius, y + radius, z + radius] },
+      triangleCount: 8, vertexCount: positions.length / 3,
+      baseColor: [1, 1, 1, 1], doubleSided: true, visible: true,
+    };
+    this.markerResource = this.#uploadDrawable(drawable);
+    this.requestRender();
+  }
+
+  getPickRay(clientX, clientY) {
+    const rect = this.canvas.getBoundingClientRect();
+    const ndcX = ((clientX - rect.left) / rect.width) * 2 - 1;
+    const ndcY = 1 - ((clientY - rect.top) / rect.height) * 2;
+    const eye = this.#eyePosition();
+    const forward = v3.normalize(v3.sub(this.camera.target, eye));
+    const right = v3.normalize(v3.cross(forward, [0, 0, 1]));
+    const up = v3.normalize(v3.cross(right, forward));
+    const aspect = Math.max(rect.width / Math.max(rect.height, 1), 0.01);
+    if (this.projection === "orthographic") {
+      const origin = v3.add(eye, v3.add(
+        v3.scale(right, ndcX * this.camera.orthoSize * aspect),
+        v3.scale(up, ndcY * this.camera.orthoSize),
+      ));
+      return { origin, direction: forward };
+    }
+    const scale = Math.tan(Math.PI / 6);
+    return {
+      origin: eye,
+      direction: v3.normalize(v3.add(forward, v3.add(
+        v3.scale(right, ndcX * scale * aspect), v3.scale(up, ndcY * scale),
+      ))),
+    };
   }
 
   frameBounds(bounds, resetAngle = false) {
@@ -182,13 +289,15 @@ export class ViewerRenderer {
     uniformMatrix(gl, this.program, "u_viewProjection", viewProjection);
     gl.uniform1i(gl.getUniformLocation(this.program, "u_shading"), this.shading);
     gl.uniform1f(gl.getUniformLocation(this.program, "u_exposure"), this.exposure);
-    for (const resource of this.resources) {
+    const drawResources = this.markerResource ? [...this.resources, this.markerResource] : this.resources;
+    for (const resource of drawResources) {
       const drawable = resource.drawable;
       if (!drawable.visible) continue;
       gl.bindVertexArray(resource.vao);
       uniformMatrix(gl, this.program, "u_model", drawable.worldMatrix);
       gl.uniform4fv(gl.getUniformLocation(this.program, "u_baseColor"), drawable.baseColor);
       gl.uniform1i(gl.getUniformLocation(this.program, "u_hasColor"), Boolean(drawable.color));
+      gl.uniform1i(gl.getUniformLocation(this.program, "u_resultMode"), resource.resultMode);
       gl.uniform1i(gl.getUniformLocation(this.program, "u_selected"), drawable.id === this.selectedId);
       gl.uniform1i(gl.getUniformLocation(this.program, "u_wirePass"), false);
       if (drawable.doubleSided) gl.disable(gl.CULL_FACE); else { gl.enable(gl.CULL_FACE); gl.cullFace(gl.BACK); }
@@ -248,8 +357,17 @@ export class ViewerRenderer {
       indexType = TYPE_ENUM[drawable.indices.componentType];
       indexCount = drawable.indices.count;
     }
+    const resultBuffer = gl.createBuffer();
+    const resultArray = new Uint8Array(drawable.vertexCount);
+    gl.bindBuffer(gl.ARRAY_BUFFER, resultBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, resultArray, gl.DYNAMIC_DRAW);
+    gl.enableVertexAttribArray(2);
+    gl.vertexAttribPointer(2, 1, gl.UNSIGNED_BYTE, true, 0, 0);
     gl.bindVertexArray(null);
-    return { drawable, vao, vertexBuffer, colorBuffer, indexBuffer, indexType, indexCount, wireIndexBuffer: null, wireIndexCount: 0 };
+    return {
+      drawable, vao, vertexBuffer, colorBuffer, indexBuffer, indexType, indexCount,
+      resultBuffer, resultArray, resultMode: 0, wireIndexBuffer: null, wireIndexCount: 0,
+    };
   }
 
   #createWireIndices(resource) {
@@ -311,19 +429,25 @@ export class ViewerRenderer {
 
   #disposeModel() {
     const gl = this.gl;
-    for (const resource of this.resources) {
-      gl.deleteVertexArray(resource.vao);
-      gl.deleteBuffer(resource.vertexBuffer);
-      gl.deleteBuffer(resource.colorBuffer);
-      gl.deleteBuffer(resource.indexBuffer);
-      gl.deleteBuffer(resource.wireIndexBuffer);
-    }
+    for (const resource of this.resources) this.#disposeResource(resource);
+    if (this.markerResource) this.#disposeResource(this.markerResource);
+    this.markerResource = null;
     if (this.lineResources) {
       gl.deleteVertexArray(this.lineResources.vao);
       gl.deleteBuffer(this.lineResources.positionBuffer);
       gl.deleteBuffer(this.lineResources.colorBuffer);
     }
     this.resources = [];
+  }
+
+  #disposeResource(resource) {
+    const gl = this.gl;
+    gl.deleteVertexArray(resource.vao);
+    gl.deleteBuffer(resource.vertexBuffer);
+    gl.deleteBuffer(resource.colorBuffer);
+    gl.deleteBuffer(resource.indexBuffer);
+    gl.deleteBuffer(resource.resultBuffer);
+    gl.deleteBuffer(resource.wireIndexBuffer);
   }
 
   #eyePosition() {

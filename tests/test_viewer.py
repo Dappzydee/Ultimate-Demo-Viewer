@@ -39,7 +39,7 @@ class ViewerServerTests(unittest.TestCase):
     def test_serves_application_and_model(self) -> None:
         with urlopen(f"{self.base_url}/") as response:
             application = response.read()
-            self.assertIn(b"CS2 Result Viewer", application)
+            self.assertIn(b"CS2 Demo Analyzer", application)
             self.assertIn(b'<canvas id="canvas" tabindex="0"', application)
         with urlopen(f"{self.base_url}/model.glb") as response:
             self.assertEqual(response.headers["Content-Type"], "model/gltf-binary")

@@ -55,3 +55,28 @@ class VisibilityResult:
     processed_poses: int
     tested_rays: int
     backend: str
+
+
+@dataclass(frozen=True)
+class VisibilityTimelineResult:
+    """Packed current and accumulated visibility for an ordered pose sequence.
+
+    Each row in ``instant_masks`` and ``cumulative_masks`` is a little-endian
+    bitset with one bit per map face. Keeping the result packed makes replay
+    practical without retaining a dense frame-by-face boolean matrix.
+    """
+
+    ticks: np.ndarray
+    instant_masks: np.ndarray
+    cumulative_masks: np.ndarray
+    face_count: int
+    processed_poses: int
+    tested_rays: int
+    backend: str
+
+    @property
+    def seen_mask(self) -> np.ndarray:
+        """Return the final accumulated face mask."""
+        if not len(self.cumulative_masks):
+            return np.zeros(self.face_count, dtype=bool)
+        return np.unpackbits(self.cumulative_masks[-1], bitorder="little")[: self.face_count].astype(bool)

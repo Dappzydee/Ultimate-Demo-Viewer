@@ -5,12 +5,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 import logging
 from pathlib import Path
+from collections.abc import Callable
 
 import numpy as np
 import trimesh
 
 from .flash_events import FlashDetonation
-from .geometry import export_glb, interior_sample_points
+from .geometry import export_glb_bytes, interior_sample_points
 from .progress import ProgressBar
 from .raycasting import create_raycaster
 
@@ -47,13 +48,22 @@ class FlashCoverageResult:
 class FlashCoverageAnalyzer:
     """Compute coverage for one flash event; it never enumerates other flashes."""
 
-    def __init__(self, mesh: trimesh.Trimesh, config: FlashCoverageConfig) -> None:
+    def __init__(
+        self, mesh: trimesh.Trimesh, config: FlashCoverageConfig, *,
+        sample_points: np.ndarray | None = None, sample_face_ids: np.ndarray | None = None,
+        raycaster: object | None = None,
+    ) -> None:
         self.mesh = mesh
         self.config = config
-        self.sample_points, self.sample_face_ids = interior_sample_points(mesh, config.samples_per_triangle)
-        self.raycaster = create_raycaster(mesh, config.prefer_gpu)
+        if sample_points is None or sample_face_ids is None:
+            sample_points, sample_face_ids = interior_sample_points(mesh, config.samples_per_triangle)
+        self.sample_points, self.sample_face_ids = sample_points, sample_face_ids
+        self.raycaster = raycaster or create_raycaster(mesh, config.prefer_gpu)
 
-    def analyze(self, flash: FlashDetonation, show_progress: bool = True) -> FlashCoverageResult:
+    def analyze(
+        self, flash: FlashDetonation, show_progress: bool = True,
+        progress_callback: Callable[[int, int], None] | None = None,
+    ) -> FlashCoverageResult:
         origin = np.asarray(flash.position, dtype=np.float64)
         preparation = ProgressBar(2, "Preparing flash coverage", show_progress)
         preparation.update(0)
@@ -79,6 +89,8 @@ class FlashCoverageAnalyzer:
             # presented as Valve's private blind-duration formula.
             sample_intensities[ids[visible]] = np.power(1.0 - batch_distances[visible] / self.config.max_distance, self.config.falloff_power)
             progress.update(min(start + len(ids), len(candidate_ids)))
+            if progress_callback:
+                progress_callback(min(start + len(ids), len(candidate_ids)), len(candidate_ids))
             LOGGER.debug("Flash ray batch %d-%d: %d/%d visible", start, start + len(ids), int(visible.sum()), len(ids))
         progress.finish()
         intensities = sample_intensities.reshape(-1, self.config.samples_per_triangle).max(axis=1)
@@ -89,6 +101,13 @@ def export_flash_coverage(
     mesh: trimesh.Trimesh, intensities: np.ndarray, flash: FlashDetonation, output_path: Path, marker_radius: float = 24.0,
 ) -> None:
     """Export coverage plus a separately selectable detonation marker sphere."""
+    output_path.write_bytes(export_flash_coverage_bytes(mesh, intensities, flash, marker_radius))
+
+
+def export_flash_coverage_bytes(
+    mesh: trimesh.Trimesh, intensities: np.ndarray, flash: FlashDetonation, marker_radius: float = 24.0,
+) -> bytes:
+    """Build an in-memory flash snapshot with a selectable detonation marker."""
     if len(intensities) != len(mesh.faces):
         raise ValueError("Expected one flash intensity for every mesh face.")
     if marker_radius <= 0:
@@ -112,4 +131,4 @@ def export_flash_coverage(
     scene = trimesh.Scene()
     scene.add_geometry(output_mesh, node_name="flash_coverage", geom_name="flash_coverage")
     scene.add_geometry(marker, node_name="flash_detonation_marker", geom_name="flash_detonation_marker")
-    export_glb(scene, output_path)
+    return export_glb_bytes(scene)

@@ -27,6 +27,8 @@ class FlashDetonation:
     round_number: int | None = None
     thrower: str | None = None
     thrower_steamid: str | None = None
+    thrower_side: str | None = None
+    thrower_team: str | None = None
 
     def to_json_dict(self) -> dict[str, Any]:
         result = asdict(self)
@@ -38,7 +40,11 @@ class FlashDetonation:
         position = value["position"]
         if isinstance(position, dict):
             position = (position["x"], position["y"], position["z"])
-        return cls(int(value["index"]), int(value["tick"]), tuple(map(float, position)), value.get("map_name"), value.get("round_number"), value.get("thrower"), value.get("thrower_steamid"))
+        return cls(
+            int(value["index"]), int(value["tick"]), tuple(map(float, position)),
+            value.get("map_name"), value.get("round_number"), value.get("thrower"),
+            value.get("thrower_steamid"), value.get("thrower_side"), value.get("thrower_team"),
+        )
 
 
 def _first_value(row: dict[str, Any], *names: str) -> Any:
@@ -79,6 +85,8 @@ def extract_flash_detonations(demo_path: Path, show_progress: bool = True) -> li
             round_number=int(round_number) if round_number is not None else None,
             thrower=_first_value(row, "thrower", "attacker_name", "user_name", "name"),
             thrower_steamid=str(_first_value(row, "thrower_steamid", "attacker_steamid", "user_steamid")) if _first_value(row, "thrower_steamid", "attacker_steamid", "user_steamid") is not None else None,
+            thrower_side=_first_value(row, "thrower_side", "attacker_side", "user_side", "side"),
+            thrower_team=_first_value(row, "thrower_team_clan_name", "attacker_team_clan_name", "user_team_clan_name", "team_clan_name"),
         ))
     progress.finish()
     LOGGER.debug("Normalized %d flash detonation events from %s", len(flashes), demo_path)

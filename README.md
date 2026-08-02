@@ -1,16 +1,41 @@
-# CS2 Static Map Visibility Analyzer
+# CS2 Demo Analyzer and 3D Viewer
 
-This project exports CS2 map geometry as a colored `.glb` file: red faces were visible to a selected player during a demo time window; gray faces were not.
+This project provides one local application for loading a CS2 demo, running player-vision or flash-coverage simulations, replaying vision over time, and inspecting the result in 3D. Analysis results stay in memory; a `.glb` is generated only when you explicitly export a snapshot.
 
-It analyzes static Awpy `.tri` map geometry. It is not a literal frame-by-frame reconstruction: smokes, flashes, player models, dynamic props/doors, scope rendering, spectator state, and screen/UI obstruction are outside this analyzer's scope.
+It analyzes static Awpy `.tri` map geometry. It is not a literal frame-by-frame reconstruction: smoke occlusion, Valve-exact flash blinding, player models, dynamic props/doors, scope rendering, spectator state, and screen/UI obstruction are outside this analyzer's scope.
 
-## Run it
+## Run the integrated app
+
+```powershell
+python viewer.py
+```
+
+The command opens a local browser window. Use **Open demo** or drop a `.dem` onto the app, then:
+
+1. Select a round and player.
+2. Choose instant vision, interval/replay vision, or flash coverage.
+3. Set the desired time or select a recorded flash grouped by team.
+4. Click **Analyze** and inspect the result immediately.
+
+The parsed demo, map geometry, interior face samples, and CPU/GPU raycaster remain available for repeated analyses. Vision replays can switch between the player's current view and accumulated visibility. Flash analysis supports demo events, manual XYZ positions, and clicking a map surface to place a flash.
+
+You can also open a demo directly:
+
+```powershell
+python viewer.py match.dem
+```
+
+Use **Save session** to write a self-contained `.cs2session` containing normalized poses, events, geometry, and the current replay result. It reopens without the original demo and can run new analyses using the saved fields. Use **Export GLB** only when you want the current displayed frame as a portable snapshot.
+
+The app uses NVIDIA Warp automatically when CUDA is available, otherwise it falls back to CPU raycasting. CPU analysis of full-map or long windows can be slow.
+
+## Command-line exports
+
+The original focused commands remain supported:
 
 ```powershell
 python vision.py match.dem --player "donk" --round 1 --start 1:00 --end 1:20 --out seen_result.glb
 ```
-
-The command uses NVIDIA Warp automatically when CUDA is available, otherwise it falls back to CPU raycasting. Use `--no-gpu` to force CPU mode.
 
 Generated artifacts are written to `out/` by default. Relative `--out` and `--json` values are also placed in `out/`; use an absolute path only when you intentionally want output elsewhere.
 
@@ -72,7 +97,7 @@ The resulting GLB uses gray for no coverage, dark red for weak coverage, and lig
 
 The GLB also includes a separate bright yellow object named `flash_detonation_marker` at the exact pop position, so it can be selected and focused in Blender.
 
-## Inspect GLB results locally
+## Inspect existing GLB results locally
 
 The repository includes a dependency-free WebGL 2 viewer, so Blender is not required for routine inspection:
 
@@ -80,7 +105,7 @@ The repository includes a dependency-free WebGL 2 viewer, so Blender is not requ
 python viewer.py out/seen_result.glb
 ```
 
-You can also run `python viewer.py` and then open or drag a `.glb` into the browser window. The viewer provides:
+Open a GLB on startup or use **Open GLB** in the integrated app:
 
 - GPU-rendered face colors with lit, flat-color, and normal views.
 - Orbit, pan, zoom, and WASD/QE movement with scene/object framing.
@@ -88,7 +113,7 @@ You can also run `python viewer.py` and then open or drag a `.glb` into the brow
 - Perspective/orthographic cameras, optional wireframe, grid and axes.
 - Triangle, vertex, file-size, bounds, camera, and frame-rate diagnostics.
 
-GLB remains the recommended export format. It already carries the analyzer's triangle geometry, RGBA colors, scene transforms, and named objects in one portable file; the viewer reads that data directly. A current Chrome, Edge, or Firefox browser with WebGL 2 is required. Everything is served on `127.0.0.1` and remains local to the machine.
+GLB remains the recommended snapshot export format. `.cs2session` is the replayable application format. A current Chrome, Edge, or Firefox browser with WebGL 2 is required. Everything is served on `127.0.0.1` and remains local to the machine.
 
 ## Project layout
 

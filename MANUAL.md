@@ -1,11 +1,23 @@
 # CS2 Demo Visualization Manual
 
-This software analyzes a Counter-Strike 2 `.dem` file and exports colored 3D map geometry as `.glb` files for its local viewer or other glTF-compatible tools. The project currently contains two visualization tools:
+This software loads a Counter-Strike 2 `.dem` once, runs repeated analyses in memory, and displays colored 3D map geometry in its integrated local viewer. It contains two visualization tools:
 
 - Player vision: static map faces a selected player could see during a selected time window.
 - Flash coverage: static map faces that could be affected by one selected flashbang detonation.
 
 Both tools use Awpy `.tri` map geometry and raycasts. They model static geometry only. They do not currently account for smoke, fire, player models, dynamic props/doors, or UI effects.
+
+## Integrated application
+
+```powershell
+python viewer.py
+```
+
+Open or drop a `.dem`, choose a round and player, then select Vision or Flash and click **Analyze**. Vision supports an instant timestamp or a start/end interval. Interval results include a timeline with current and accumulated visibility modes. Flash events are grouped by team; manual flashes can be entered as XYZ coordinates or placed by clicking the map.
+
+Results remain in memory. **Export GLB** writes only the currently displayed snapshot. **Save session** creates a replayable `.cs2session` with normalized demo data, map geometry, and the current result; it can be reopened without the original `.dem`.
+
+The local service listens only on `127.0.0.1`. The UI is browser-based, but parsing and raycasting run in the local Python process so Awpy and NVIDIA Warp remain available.
 
 ## Output files
 
@@ -130,7 +142,7 @@ Launch the included viewer with a result file:
 python viewer.py out/player_vision.glb
 ```
 
-The command opens a local browser window. You can open or drag another GLB into it at any time. Left-drag orbits, middle-drag pans, the wheel zooms, `WASD` and `Q/E` move, and `F` frames the selected object or full scene. Use the scene list to select, hide, or double-click-frame named objects such as `flash_detonation_marker`. The toolbar exposes flat colors, lit colors, normals, wireframe, grid, axes, and perspective/orthographic views.
+The command opens the integrated local app with that GLB. You can open or drag another `.dem`, `.cs2session`, or GLB at any time. Left-drag orbits, middle-drag pans, the wheel zooms, `WASD` and `Q/E` move, and `F` frames the selected object or full scene. The toolbar exposes flat colors, lit colors, normals, wireframe, grid, axes, and perspective/orthographic views.
 
 The viewer requires a current browser with WebGL 2 but has no extra Python or JavaScript dependencies. The local server listens only on `127.0.0.1`; model data is not uploaded.
 

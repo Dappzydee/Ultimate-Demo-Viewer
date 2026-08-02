@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>CS2 Result Viewer</title>
+    <title>CS2 Demo Analyzer</title>
     <link rel="stylesheet" href="styles.css">
   </head>
   <body>
@@ -12,52 +12,125 @@
         <div class="brand">
           <div class="brand-mark">V</div>
           <div>
-            <strong>CS2 Result Viewer</strong>
-            <span id="model-name">No model loaded</span>
+            <strong>CS2 Demo Analyzer</strong>
+            <span id="model-name">No demo or model loaded</span>
           </div>
         </div>
-        <div class="toolbar" role="toolbar" aria-label="Viewer tools">
-          <button id="open-button" class="primary" title="Open GLB (Ctrl+O)">Open GLB</button>
+        <div class="toolbar" role="toolbar" aria-label="Application tools">
+          <button id="open-demo-button" class="primary">Open demo</button>
+          <button id="open-session-button">Open session</button>
+          <button id="open-button" title="Open GLB (Ctrl+O)">Open GLB</button>
+          <input id="demo-input" type="file" accept=".dem" hidden>
+          <input id="session-input" type="file" accept=".cs2session" hidden>
           <input id="file-input" type="file" accept=".glb,model/gltf-binary" hidden>
+          <span class="divider"></span>
+          <button id="save-session-button" disabled>Save session</button>
+          <button id="export-button" disabled>Export GLB</button>
           <span class="divider"></span>
           <button id="frame-button" title="Frame scene or selected object (F)">Frame</button>
           <button id="projection-button" title="Toggle perspective/orthographic (5)">Perspective</button>
           <button id="wireframe-button" aria-pressed="false" title="Toggle wireframe (Shift+W)">Wireframe</button>
           <button id="grid-button" class="active" aria-pressed="true" title="Toggle grid (G)">Grid</button>
           <button id="axes-button" class="active" aria-pressed="true" title="Toggle axes (X)">Axes</button>
-          <span class="divider"></span>
           <label class="select-label">Shading
             <select id="shading-select">
-              <option value="lit">Lit colors</option>
-              <option value="flat">Flat colors</option>
+              <option value="lit">Lit</option>
+              <option value="flat">Flat</option>
               <option value="normal">Normals</option>
             </select>
-          </label>
-          <label class="slider-label" title="Scene exposure">
-            <span>Exposure</span>
-            <input id="exposure" type="range" min="0.4" max="1.8" step="0.05" value="1">
           </label>
         </div>
       </header>
 
       <main>
         <aside class="sidebar">
+          <section id="session-section">
+            <h2>Loaded demo</h2>
+            <div id="session-empty" class="empty-copy">Open a demo or saved session to begin.</div>
+            <div id="session-controls" hidden>
+              <div class="session-summary"><strong id="session-map">—</strong><span id="session-source">—</span></div>
+              <label class="field">Round<select id="round-select"></select></label>
+              <label class="field">Player<select id="player-select"></select></label>
+            </div>
+          </section>
+
+          <section id="analysis-section" hidden>
+            <h2>Analysis</h2>
+            <div class="segmented" role="group" aria-label="Analysis type">
+              <button id="vision-tab" class="active" data-analysis="vision">Vision</button>
+              <button id="flash-tab" data-analysis="flash">Flash</button>
+            </div>
+
+            <div id="vision-controls" class="control-stack">
+              <label class="field">Time mode
+                <select id="time-mode">
+                  <option value="instant">Instant</option>
+                  <option value="interval" selected>Interval / replay</option>
+                </select>
+              </label>
+              <div class="time-grid">
+                <label class="field">Start <input id="start-time" type="number" min="0" step="0.1" value="0"></label>
+                <label id="end-time-field" class="field">End <input id="end-time" type="number" min="0" step="0.1" value="10"></label>
+              </div>
+              <input id="start-slider" type="range" min="0" max="10" step="0.1" value="0" aria-label="Start time">
+              <input id="end-slider" type="range" min="0" max="10" step="0.1" value="10" aria-label="End time">
+              <details>
+                <summary>Vision settings</summary>
+                <div class="settings-grid">
+                  <label class="field">FOV <input id="vision-fov" type="number" value="90" min="1" max="360"></label>
+                  <label class="field">Distance <input id="vision-distance" type="number" value="4000" min="1"></label>
+                  <label class="field">Tick step <input id="tick-step" type="number" value="4" min="1"></label>
+                  <label class="field">Samples
+                    <select id="vision-samples"><option value="4">4</option><option value="1">1</option></select>
+                  </label>
+                </div>
+              </details>
+            </div>
+
+            <div id="flash-controls" class="control-stack" hidden>
+              <label class="field">Source
+                <select id="flash-source">
+                  <option value="event">Demo event</option>
+                  <option value="manual">Manual position</option>
+                </select>
+              </label>
+              <label id="flash-event-field" class="field">Flash event<select id="flash-event-select"></select></label>
+              <div id="manual-flash-controls" hidden>
+                <div class="coordinate-grid">
+                  <label class="field">X <input id="flash-x" type="number" step="0.1"></label>
+                  <label class="field">Y <input id="flash-y" type="number" step="0.1"></label>
+                  <label class="field">Z <input id="flash-z" type="number" step="0.1"></label>
+                </div>
+                <button id="place-flash-button" class="wide-button">Place on map</button>
+                <span id="placement-help" class="hint" hidden>Click a map surface. Press Escape to cancel.</span>
+              </div>
+              <details>
+                <summary>Flash settings</summary>
+                <div class="settings-grid">
+                  <label class="field">Distance <input id="flash-distance" type="number" value="1500" min="1"></label>
+                  <label class="field">Falloff <input id="flash-falloff" type="number" value="1" min="0.1" step="0.1"></label>
+                  <label class="field">Samples
+                    <select id="flash-samples"><option value="4">4</option><option value="1">1</option></select>
+                  </label>
+                </div>
+              </details>
+            </div>
+            <button id="analyze-button" class="primary wide-button">Analyze</button>
+          </section>
+
+          <section id="result-section" hidden>
+            <h2>Current result</h2>
+            <dl id="result-details"></dl>
+          </section>
+
           <section>
             <div class="section-heading">
               <h2>Scene objects</h2>
               <button id="show-all-button" class="text-button">Show all</button>
             </div>
-            <div id="object-list" class="object-list empty">Open a GLB to inspect its objects.</div>
+            <div id="object-list" class="object-list empty">Load a scene to inspect its objects.</div>
           </section>
-          <section class="details-section">
-            <h2>Selection</h2>
-            <dl id="selection-details">
-              <div><dt>Name</dt><dd>—</dd></div>
-              <div><dt>Triangles</dt><dd>—</dd></div>
-              <div><dt>Vertices</dt><dd>—</dd></div>
-              <div><dt>Bounds</dt><dd>—</dd></div>
-            </dl>
-          </section>
+
           <section class="help">
             <h2>Navigation</h2>
             <p><kbd>LMB</kbd> orbit · <kbd>MMB</kbd> pan · <kbd>Wheel</kbd> zoom</p>
@@ -69,17 +142,31 @@
           <canvas id="canvas" tabindex="0" aria-label="3D model viewport"></canvas>
           <div class="viewport-badge">Z UP</div>
           <div id="drop-zone" class="drop-zone">
-            <div class="drop-icon">GLB</div>
-            <h1>Inspect analyzer output directly</h1>
-            <p>Drop a colored <strong>.glb</strong> here or open one from disk.</p>
-            <button id="empty-open-button" class="primary">Choose GLB</button>
+            <div class="drop-icon">DEM</div>
+            <h1>Analyze and inspect in one place</h1>
+            <p>Drop a <strong>.dem</strong>, <strong>.cs2session</strong>, or <strong>.glb</strong> here.</p>
+            <button id="empty-open-button" class="primary">Choose demo</button>
           </div>
           <div id="loading" class="loading" hidden>
             <div class="spinner"></div>
-            <strong id="loading-title">Loading model…</strong>
+            <strong id="loading-title">Working…</strong>
             <span id="loading-detail"></span>
+            <progress id="job-progress" max="1" value="0"></progress>
           </div>
           <div id="toast" class="toast" role="status" hidden></div>
+
+          <div id="timeline" class="timeline" hidden>
+            <button id="play-button" aria-label="Play or pause">Play</button>
+            <label>View
+              <select id="replay-mode"><option value="instant">Current</option><option value="cumulative" selected>Accumulated</option></select>
+            </label>
+            <input id="frame-slider" type="range" min="0" max="0" value="0" aria-label="Replay frame">
+            <span id="replay-time">—</span>
+            <label>Speed
+              <select id="playback-speed"><option value="0.25">0.25×</option><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option></select>
+            </label>
+          </div>
+
           <div class="statusbar">
             <span id="status-summary">Ready</span>
             <span id="camera-status">—</span>
