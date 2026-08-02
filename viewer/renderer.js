@@ -100,6 +100,7 @@ export class ViewerRenderer {
     this.projection = "perspective";
     this.camera = { target: [0, 0, 0], yaw: Math.PI * 0.22, pitch: Math.PI * 0.24, distance: 10, orthoSize: 5 };
     this.flashCameraPosition = null;
+    this.interactionLocked = false;
     this.sceneRadius = 10;
     this.lineResources = null;
     this.keys = new Set();
@@ -257,6 +258,11 @@ export class ViewerRenderer {
       this.focusPoint(previousPosition);
     }
     this.requestRender();
+  }
+
+  setInteractionLocked(locked) {
+    this.interactionLocked = Boolean(locked);
+    if (this.interactionLocked) this.keys.clear();
   }
 
   getPickRay(clientX, clientY) {
@@ -573,6 +579,7 @@ export class ViewerRenderer {
     let drag = null;
     this.canvas.addEventListener("contextmenu", (event) => event.preventDefault());
     this.canvas.addEventListener("pointerdown", (event) => {
+      if (this.interactionLocked) return;
       this.canvas.focus();
       this.canvas.setPointerCapture(event.pointerId);
       const mode = this.flashCameraPosition ? "look" : event.button === 0 && !event.shiftKey ? "orbit" : "pan";
@@ -580,6 +587,11 @@ export class ViewerRenderer {
       this.canvas.classList.add("dragging");
     });
     this.canvas.addEventListener("pointermove", (event) => {
+      if (this.interactionLocked) {
+        drag = null;
+        this.canvas.classList.remove("dragging");
+        return;
+      }
       if (!drag) return;
       const dx = event.clientX - drag.x;
       const dy = event.clientY - drag.y;

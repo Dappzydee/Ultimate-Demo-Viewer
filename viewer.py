@@ -87,6 +87,7 @@ class ApplicationState:
     def __init__(self) -> None:
         self.session: DemoSession | None = None
         self.results: dict[str, StoredResult] = {}
+        self.preview_results: dict[str, StoredResult] = {}
         self.jobs: dict[str, AnalysisJob] = {}
         self.lock = threading.RLock()
         self.working_directory = tempfile.TemporaryDirectory(prefix="cs2-viewer-")
@@ -133,6 +134,12 @@ class ApplicationState:
         with self.lock:
             self.results[result.id] = result
             self._evict_results(result.id)
+
+    def _store_preview_result(self, result: StoredResult) -> None:
+        """Keep only the newest transient result used by the live viewport preview."""
+        with self.lock:
+            self.preview_results.clear()
+            self.preview_results[result.id] = result
 
     def _evict_results(self, protected_id: str | None = None) -> None:
         def remove_oldest_unpinned() -> bool:
@@ -225,6 +232,7 @@ class ApplicationState:
         with self.lock:
             self.session = session
             self.results.clear()
+            self.preview_results.clear()
             for saved_metadata, saved_data in session.saved_analyses:
                 metadata = dict(saved_metadata)
                 analysis_type = str(metadata.pop("analysisType"))
@@ -306,7 +314,7 @@ class ApplicationState:
 
         return self._start_job("vision", analyze)
 
-    def start_flash(self, request: dict[str, Any]) -> AnalysisJob:
+    def start_flash(self, request: dict[str, Any], *, preview: bool = False) -> AnalysisJob:
         session = self._require_session()
         event_index = int(request["eventIndex"]) if request.get("eventIndex") is not None else None
         manual_position = None
@@ -317,7 +325,7 @@ class ApplicationState:
             manual_position = tuple(float(value) for value in position)
         config = FlashCoverageConfig(
             max_distance=float(request.get("maxDistance", 1500.0)),
-            samples_per_triangle=int(request.get("samplesPerTriangle", 4)),
+            samples_per_triangle=1 if preview else int(request.get("samplesPerTriangle", 4)),
             falloff_power=float(request.get("falloffPower", 1.0)),
             ray_batch_size=int(request.get("rayBatchSize", 250_000)),
             prefer_gpu=not bool(request.get("forceCpu", False)),
@@ -327,9 +335,10 @@ class ApplicationState:
             "roundNumber": request.get("roundNumber"), "tick": int(request.get("tick", 0)),
             "config": asdict(config),
         })
-        cached = self._cached_job("flash", cache_key)
-        if cached:
-            return cached
+        if not preview:
+            cached = self._cached_job("flash", cache_key)
+            if cached:
+                return cached
 
         def analyze(job: AnalysisJob) -> None:
             if event_index is not None:
@@ -350,6 +359,7 @@ class ApplicationState:
             )
             metadata = {
                 "source": source,
+                "preview": preview,
                 "faceCount": len(coverage.intensities),
                 "testedRays": coverage.tested_rays,
                 "backend": coverage.backend,
@@ -357,13 +367,17 @@ class ApplicationState:
                 "config": asdict(config),
             }
             result_id = uuid.uuid4().hex
-            self._store_result(StoredResult(
+            result = StoredResult(
                 result_id, "flash", metadata, encode_flash_intensities(coverage.intensities),
-                cache_key=cache_key,
-            ))
+                cache_key=None if preview else cache_key,
+            )
+            if preview:
+                self._store_preview_result(result)
+            else:
+                self._store_result(result)
             job.result_id = result_id
 
-        return self._start_job("flash", analyze)
+        return self._start_job("flash-preview" if preview else "flash", analyze)
 
     def get_job(self, job_id: str) -> AnalysisJob:
         try:
@@ -372,10 +386,11 @@ class ApplicationState:
             raise ValueError("Analysis job was not found.") from error
 
     def get_result(self, result_id: str) -> StoredResult:
-        try:
-            return self.results[result_id]
-        except KeyError as error:
-            raise ValueError("Analysis result was not found.") from error
+        with self.lock:
+            result = self.results.get(result_id) or self.preview_results.get(result_id)
+            if result is None:
+                raise ValueError("Analysis result was not found.")
+            return result
 
     def export_result_glb(self, result_id: str, mode: str, frame: int | None) -> bytes:
         session = self._require_session()
@@ -504,6 +519,10 @@ class ViewerRequestHandler(BaseHTTPRequestHandler):
                 return
             if path == "/api/analyze/flash":
                 job = self.server.app_state.start_flash(self._read_json())
+                self._send_json(job.to_json(), 202)
+                return
+            if path == "/api/preview/flash":
+                job = self.server.app_state.start_flash(self._read_json(), preview=True)
                 self._send_json(job.to_json(), 202)
                 return
             if path.startswith("/api/results/") and path.endswith("/pin"):

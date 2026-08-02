@@ -23,6 +23,20 @@ const appState = {
   flashCamera: false,
   resultHistory: null,
   sessionResultIds: new Set(),
+  liveFlash: {
+    enabled: false,
+    dragging: false,
+    finalizing: false,
+    pointerId: null,
+    pendingPointer: null,
+    pickInFlight: false,
+    previewInFlight: false,
+    pendingPosition: null,
+    debounceTimer: null,
+    epoch: 0,
+    revision: 0,
+    previewVisible: false,
+  },
 };
 let toastTimer = null;
 
@@ -105,6 +119,7 @@ $("#player-marker-toggle").addEventListener("change", () => {
 bindTimeControl("#start-time", "#start-slider", true);
 bindTimeControl("#end-time", "#end-slider", false);
 $("#flash-source").addEventListener("change", () => {
+  setLiveFlashMode(false);
   setFlashCameraMode(false);
   configureFlashSource();
 });
@@ -112,10 +127,12 @@ $("#focus-flash-toggle").addEventListener("change", () => {
   if ($("#focus-flash-toggle").checked && appState.analysisType === "flash" && !appState.flashCamera) focusSelectedFlash();
 });
 $("#flash-camera-button").addEventListener("click", () => setFlashCameraMode(!appState.flashCamera));
+$("#live-flash-toggle").addEventListener("change", (event) => setLiveFlashMode(event.target.checked));
 for (const selector of ["#flash-x", "#flash-y", "#flash-z"]) {
   $(selector).addEventListener("input", previewManualFlash);
 }
 $("#place-flash-button").addEventListener("click", () => {
+  setLiveFlashMode(false);
   setFlashCameraMode(false);
   setPlacementMode(!appState.placingFlash);
 });
@@ -131,7 +148,7 @@ $("#replay-mode").addEventListener("change", applyReplayFrame);
 $("#play-button").addEventListener("click", () => appState.playing ? stopPlayback() : startPlayback());
 
 canvas.addEventListener("click", async (event) => {
-  if (!appState.placingFlash) return;
+  if (!appState.placingFlash || appState.liveFlash.enabled) return;
   try {
     const ray = renderer.getPickRay(event.clientX, event.clientY);
     const response = await apiJson("/api/pick", { method: "POST", body: JSON.stringify(ray) });
@@ -143,7 +160,39 @@ canvas.addEventListener("click", async (event) => {
   }
 });
 
+canvas.addEventListener("pointerdown", (event) => {
+  const live = appState.liveFlash;
+  if (!live.enabled || live.finalizing || event.button !== 0) return;
+  event.preventDefault();
+  live.dragging = true;
+  live.pointerId = event.pointerId;
+  live.pendingPointer = { x: event.clientX, y: event.clientY, final: false, epoch: live.epoch };
+  canvas.setPointerCapture(event.pointerId);
+  processLiveFlashPicks();
+});
+
+canvas.addEventListener("pointermove", (event) => {
+  const live = appState.liveFlash;
+  if (!live.enabled || !live.dragging || event.pointerId !== live.pointerId) return;
+  event.preventDefault();
+  live.pendingPointer = { x: event.clientX, y: event.clientY, final: false, epoch: live.epoch };
+  processLiveFlashPicks();
+});
+
+const finishLivePointer = (event) => {
+  const live = appState.liveFlash;
+  if (!live.enabled || !live.dragging || event.pointerId !== live.pointerId) return;
+  event.preventDefault();
+  live.dragging = false;
+  live.pointerId = null;
+  live.pendingPointer = { x: event.clientX, y: event.clientY, final: true, epoch: live.epoch };
+  processLiveFlashPicks();
+};
+canvas.addEventListener("pointerup", finishLivePointer);
+canvas.addEventListener("pointercancel", finishLivePointer);
+
 window.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && appState.liveFlash.enabled) { setLiveFlashMode(false); return; }
   if (event.key === "Escape" && appState.placingFlash) { setPlacementMode(false); return; }
   if (event.key === "Escape" && appState.flashCamera) { setFlashCameraMode(false); return; }
   if (event.target.matches("input, select, button")) return;
@@ -199,6 +248,7 @@ async function loadSessionFile(file) {
 
 async function uploadAndLoad(file, endpoint, title) {
   stopPlayback();
+  setLiveFlashMode(false);
   setFlashCameraMode(false);
   clearActiveResult();
   appState.sessionResultIds.clear();
@@ -336,6 +386,7 @@ function selectFlash(index) {
 }
 
 function setAnalysisType(type) {
+  if (type !== "flash") setLiveFlashMode(false);
   appState.analysisType = type;
   for (const name of ["vision", "flash"]) {
     const button = $(`#${name}-tab`);
@@ -427,6 +478,7 @@ function focusSelectedFlash() {
 
 function setFlashCameraMode(enabled) {
   if (enabled) {
+    setLiveFlashMode(false);
     const position = currentFlashPosition();
     if (!position) {
       showError(new Error("Select a recorded flash or enter a manual position before entering flash camera mode."));
@@ -451,6 +503,186 @@ function setFlashCameraMode(enabled) {
   $("#flash-camera-button").classList.remove("active");
   $("#flash-camera-button").setAttribute("aria-pressed", "false");
   $("#flash-camera-button").textContent = "Enter flash camera";
+}
+
+function setLiveFlashMode(enabled) {
+  const live = appState.liveFlash;
+  if (enabled && (!appState.session || appState.analysisType !== "flash" || $("#flash-source").value !== "manual")) {
+    $("#live-flash-toggle").checked = false;
+    showError(new Error("Live flash coverage requires a loaded demo and Manual position as the flash source."));
+    return;
+  }
+  if (enabled === live.enabled) {
+    $("#live-flash-toggle").checked = enabled;
+    return;
+  }
+
+  live.epoch++;
+  live.enabled = enabled;
+  live.dragging = false;
+  live.finalizing = false;
+  live.pointerId = null;
+  live.pendingPointer = null;
+  live.pendingPosition = null;
+  clearTimeout(live.debounceTimer);
+  live.debounceTimer = null;
+  $("#live-flash-toggle").checked = enabled;
+  viewport.classList.toggle("live-flash-active", enabled);
+  renderer.setInteractionLocked(enabled);
+
+  if (enabled) {
+    setPlacementMode(false);
+    setFlashCameraMode(false);
+    setLiveFlashStatus("Drag the flash across map surfaces; release for the configured full-quality result.");
+    canvas.focus();
+  } else {
+    if (live.previewVisible) restoreActiveVisualization();
+    live.previewVisible = false;
+    setLiveFlashStatus("Drag the flash across map surfaces; release for the configured full-quality result.");
+  }
+}
+
+function setLiveFlashStatus(message) {
+  $("#live-flash-status").textContent = message;
+}
+
+function restoreActiveVisualization() {
+  if (appState.replay?.type === "vision") applyReplayFrame();
+  else if (appState.replay?.type === "flash") renderer.setFaceValues(appState.replay.values, "flash");
+  else renderer.clearFaceValues();
+}
+
+async function processLiveFlashPicks() {
+  const live = appState.liveFlash;
+  if (live.pickInFlight) return;
+  live.pickInFlight = true;
+  try {
+    while (live.pendingPointer) {
+      const target = live.pendingPointer;
+      live.pendingPointer = null;
+      if (!live.enabled || target.epoch !== live.epoch) continue;
+      let position = null;
+      try {
+        const ray = renderer.getPickRay(target.x, target.y);
+        const response = await apiJson("/api/pick", { method: "POST", body: JSON.stringify(ray) });
+        position = response.position;
+      } catch (error) {
+        if (target.epoch === live.epoch) showError(error);
+      }
+      if (!live.enabled || target.epoch !== live.epoch) continue;
+      if (position) {
+        setManualPosition(position);
+        live.revision++;
+        if (!target.final) scheduleLiveFlashPreview(position, target.epoch, live.revision);
+      } else {
+        setLiveFlashStatus("No map surface under the pointer.");
+      }
+      if (target.final) await finalizeLiveFlash(target.epoch);
+    }
+  } finally {
+    live.pickInFlight = false;
+    if (live.pendingPointer) processLiveFlashPicks();
+  }
+}
+
+function scheduleLiveFlashPreview(position, epoch, revision) {
+  const live = appState.liveFlash;
+  live.pendingPosition = { position: [...position], epoch, revision };
+  clearTimeout(live.debounceTimer);
+  live.debounceTimer = setTimeout(() => runLiveFlashPreview(), 180);
+  setLiveFlashStatus("Position updated; preparing quick preview…");
+}
+
+async function runLiveFlashPreview() {
+  const live = appState.liveFlash;
+  live.debounceTimer = null;
+  if (!live.enabled || live.finalizing || live.previewInFlight || !live.pendingPosition) return;
+  const pending = live.pendingPosition;
+  live.pendingPosition = null;
+  if (pending.epoch !== live.epoch) return;
+  live.previewInFlight = true;
+  setLiveFlashStatus("Calculating quick preview (1 sample per triangle)…");
+  try {
+    const job = await apiJson("/api/preview/flash", {
+      method: "POST",
+      body: JSON.stringify(flashAnalysisRequest(pending.position, 1)),
+    });
+    const completed = await waitForJobQuiet(job.id);
+    const response = await fetch(`/api/results/${completed.resultId}/data.bin`);
+    if (!response.ok) throw new Error("Could not load the live flash preview.");
+    const buffer = await response.arrayBuffer();
+    if (
+      live.enabled && live.dragging && !live.finalizing &&
+      pending.epoch === live.epoch && pending.revision === live.revision
+    ) {
+      installLiveFlashPreview(buffer, pending.position);
+    }
+  } catch (error) {
+    if (pending.epoch === live.epoch && live.enabled) showError(error);
+  } finally {
+    live.previewInFlight = false;
+    if (live.enabled && live.dragging && !live.finalizing && live.pendingPosition) {
+      clearTimeout(live.debounceTimer);
+      live.debounceTimer = setTimeout(() => runLiveFlashPreview(), 180);
+    }
+  }
+}
+
+function installLiveFlashPreview(buffer, position) {
+  const header = parseHeader(buffer, "CSF1");
+  if (buffer.byteLength !== 24 + header.faceCount) throw new Error("Flash preview is truncated.");
+  renderer.setFaceValues(new Uint8Array(buffer, 24, header.faceCount), "flash");
+  renderer.setMarker(position);
+  appState.liveFlash.previewVisible = true;
+  setLiveFlashStatus("Quick preview shown. Keep dragging, or release for full quality.");
+  $("#status-summary").textContent = `Live flash preview · ${formatNumber(header.faceCount)} faces · 1 sample`;
+}
+
+async function finalizeLiveFlash(epoch) {
+  const live = appState.liveFlash;
+  if (!live.enabled || live.finalizing || epoch !== live.epoch) return;
+  const position = manualPosition(false);
+  if (!position) {
+    setLiveFlashStatus("Drag over a map surface before releasing.");
+    return;
+  }
+  live.finalizing = true;
+  live.revision++;
+  live.pendingPosition = null;
+  clearTimeout(live.debounceTimer);
+  live.debounceTimer = null;
+  setLiveFlashStatus(`Calculating full-quality result (${Number($("#flash-samples").value)} samples per triangle)…`);
+  try {
+    while (live.previewInFlight && live.enabled && epoch === live.epoch) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    if (!live.enabled || epoch !== live.epoch) return;
+    setLoading(true, "Analyzing flash coverage", "Running full-quality pass", 0);
+    const job = await apiJson("/api/analyze/flash", {
+      method: "POST",
+      body: JSON.stringify(flashAnalysisRequest(position)),
+    });
+    const completed = await waitForJob(job.id);
+    if (!live.enabled || epoch !== live.epoch) return;
+    await refreshApplicationState(false);
+    await loadResult(completed.resultId);
+    live.previewVisible = false;
+    setLiveFlashStatus("Full-quality result ready. Drag again for another analysis.");
+  } catch (error) {
+    if (epoch === live.epoch) showError(error);
+  } finally {
+    setLoading(false);
+    if (epoch === live.epoch) live.finalizing = false;
+  }
+}
+
+function flashAnalysisRequest(position, samplesPerTriangle = Number($("#flash-samples").value)) {
+  return {
+    position,
+    maxDistance: Number($("#flash-distance").value),
+    falloffPower: Number($("#flash-falloff").value),
+    samplesPerTriangle,
+  };
 }
 
 function setManualPosition(position) {
@@ -498,12 +730,14 @@ async function analyzeCurrentSelection(type) {
       endpoint = "/api/analyze/flash";
       const manual = $("#flash-source").value === "manual";
       if (!manual && appState.selectedFlashIndex === null) throw new Error("Select a recorded flash to analyze.");
-      request = {
-        maxDistance: Number($("#flash-distance").value),
-        falloffPower: Number($("#flash-falloff").value),
-        samplesPerTriangle: Number($("#flash-samples").value),
-        ...(manual ? { position: manualPosition() } : { eventIndex: appState.selectedFlashIndex }),
-      };
+      request = manual
+        ? flashAnalysisRequest(manualPosition())
+        : {
+          eventIndex: appState.selectedFlashIndex,
+          maxDistance: Number($("#flash-distance").value),
+          falloffPower: Number($("#flash-falloff").value),
+          samplesPerTriangle: Number($("#flash-samples").value),
+        };
     }
     setLoading(true, isVision ? "Analyzing player vision" : "Analyzing flash coverage", "Preparing rays", 0);
     const job = await apiJson(endpoint, { method: "POST", body: JSON.stringify(request) });
@@ -524,6 +758,15 @@ async function waitForJob(jobId) {
     if (job.status === "complete") return job;
     if (job.status === "error") throw new Error(job.error || "The job failed.");
     await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+}
+
+async function waitForJobQuiet(jobId) {
+  while (true) {
+    const job = await apiJson(`/api/jobs/${jobId}`);
+    if (job.status === "complete") return job;
+    if (job.status === "error") throw new Error(job.error || "The preview job failed.");
+    await new Promise((resolve) => setTimeout(resolve, 150));
   }
 }
 
@@ -579,6 +822,7 @@ function installFlashResult(buffer, metadata) {
   renderer.setPlayerMarker(null);
   renderer.setFaceValues(appState.replay.values, "flash");
   renderer.setMarker(positionArray(metadata.flash.position));
+  appState.liveFlash.previewVisible = false;
   $("#status-summary").textContent = `${formatNumber(header.faceCount)} faces · ${metadata.backend} · ${formatNumber(metadata.testedRays)} rays`;
 }
 
@@ -845,6 +1089,7 @@ function renderResultDetails(result) {
 
 async function loadGlbFile(file) {
   if (!file.name.toLowerCase().endsWith(".glb")) return showError(new Error("Choose a .glb file."));
+  setLiveFlashMode(false);
   setFlashCameraMode(false);
   clearActiveResult();
   setLoading(true, file.name, formatBytes(file.size));

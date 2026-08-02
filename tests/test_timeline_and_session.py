@@ -176,6 +176,25 @@ class SessionArchiveTests(unittest.TestCase):
             self.assertEqual(flash_result.analysis_type, "flash")
             self.assertEqual(len(decode_flash_intensities(flash_result.data)), 2)
             self.assertEqual(state.export_result_glb(flash_job.result_id, "cumulative", None)[:4], b"glTF")
+
+            history_ids = set(state.results)
+            preview_job = state.start_flash({
+                "position": [2, 3, 4], "maxDistance": 30,
+                "samplesPerTriangle": 4, "forceCpu": True,
+            }, preview=True)
+            for _ in range(100):
+                if preview_job.status in {"complete", "error"}:
+                    break
+                time.sleep(0.01)
+            self.assertEqual(preview_job.status, "complete", preview_job.error)
+            preview_result = state.get_result(preview_job.result_id)
+            self.assertTrue(preview_result.metadata["preview"])
+            self.assertEqual(preview_result.metadata["config"]["samples_per_triangle"], 1)
+            self.assertEqual(set(state.results), history_ids)
+            self.assertNotIn(preview_job.result_id, {
+                item["id"] for item in state.public_state()["results"]
+            })
+
             saved_history = state.export_session([job.result_id, flash_job.result_id])
             reopened_history = DemoSession.from_archive_bytes(saved_history)
             self.assertEqual(len(reopened_history.saved_analyses), 2)
