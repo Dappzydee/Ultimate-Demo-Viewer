@@ -7,7 +7,7 @@ It analyzes static Awpy `.tri` map geometry. It is not a literal frame-by-frame 
 ## Run it
 
 ```powershell
-python nvidia-warp-kimi.py match.dem --player "donk" --round 1 --start 1:00 --end 1:20 --out seen_result.glb
+python vision.py match.dem --player "donk" --round 1 --start 1:00 --end 1:20 --out seen_result.glb
 ```
 
 The command uses NVIDIA Warp automatically when CUDA is available, otherwise it falls back to CPU raycasting. Use `--no-gpu` to force CPU mode.
@@ -17,13 +17,13 @@ Generated artifacts are written to `out/` by default. Relative `--out` and `--js
 If a demo header has no usable tick rate, use an explicit override:
 
 ```powershell
-python nvidia-warp-kimi.py match.dem --player "donk" --round 1 --start 0 --end 20 --tick-rate 128
+python vision.py match.dem --player "donk" --round 1 --start 0 --end 20 --tick-rate 128
 ```
 
-Before running, install the dependencies and download Awpy geometry once:
+Before running, install dependencies and download Awpy geometry once:
 
 ```powershell
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
 awpy get tris
 ```
 
@@ -33,7 +33,7 @@ By default the analyzer tests four **interior** points per face: its center and 
 
 ```powershell
 # Require two different interior samples to be visible before a face is red.
-python nvidia-warp-kimi.py match.dem --player "donk" --round 1 --start 0 --end 20 --min-visible-samples 2
+python vision.py match.dem --player "donk" --round 1 --start 0 --end 20 --min-visible-samples 2
 ```
 
 `--samples-per-triangle 1` is faster but less resilient to small occluders. `--samples-per-triangle 4` is the recommended default. `--ray-batch-size` controls GPU/CPU dispatch size; increase it only if sufficient GPU memory is available.
@@ -42,7 +42,7 @@ The demo's `duck_amount` property is used to interpolate between `--eye-height` 
 
 ## Library API
 
-The reusable package is `cs2_visibility`; `nvidia-warp-kimi.py` is only a compatibility CLI wrapper. A UI or larger application can load poses and run an analysis without invoking a subprocess:
+The reusable package is `cs2_visibility`; `vision.py` is the direct command-line entry point for a checkout. A UI or larger application can load poses and run an analysis without invoking a subprocess:
 
 ```python
 from pathlib import Path
@@ -89,3 +89,11 @@ You can also run `python viewer.py` and then open or drag a `.glb` into the brow
 - Triangle, vertex, file-size, bounds, camera, and frame-rate diagnostics.
 
 GLB remains the recommended export format. It already carries the analyzer's triangle geometry, RGBA colors, scene transforms, and named objects in one portable file; the viewer reads that data directly. A current Chrome, Edge, or Firefox browser with WebGL 2 is required. Everything is served on `127.0.0.1` and remains local to the machine.
+
+## Project layout
+
+Supported application behavior lives in `cs2_visibility/`. `viewer/` contains the independent static viewer, while `scripts/` contains development utilities and archived prototypes that are not part of the supported application. Large demo files and generated outputs stay local and are ignored by Git. See [the project layout guide](docs/project-layout.md) before adding a new top-level file.
+
+## Optional installed commands
+
+`pyproject.toml` also defines `cs2-vision`, `cs2-flash-events`, and `cs2-flash-coverage`. They are generated only after `python -m pip install -e .` and are available only while that Python environment is activated. They intentionally have different names from the `.py` files, just like `pytest` is generated from a Python package rather than a file named `pytest.py`.

@@ -1,12 +1,7 @@
-# Core analyzer dependencies
+# Runtime dependencies for running the repository directly.
 awpy
-trimesh
 numpy
 polars
-# Required by trimesh's CPU raycaster. Keep this so the analyzer runs on
-# machines without an NVIDIA CUDA GPU.
 rtree
-
-# Optional but recommended for NVIDIA GPU raycasting.
-# The analyzer falls back to CPU raycasting when this is unavailable.
+trimesh
 warp-lang

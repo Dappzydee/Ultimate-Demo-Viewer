@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cs2-visibility"
+version = "0.2.0"
+description = "Static-map visibility visualizations for Counter-Strike 2 demos"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "awpy",
+    "numpy",
+    "polars",
+    "rtree",
+    "trimesh",
+    "warp-lang",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[project.scripts]
+cs2-vision = "cs2_visibility.cli:main"
+cs2-flash-events = "cs2_visibility.flash_events_cli:main"
+cs2-flash-coverage = "cs2_visibility.flash_coverage_cli:main"
+
+[tool.setuptools.packages.find]
+include = ["cs2_visibility*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

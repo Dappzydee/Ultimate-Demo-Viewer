@@ -3,6 +3,7 @@
 demo_env/
 .venv/
 .cs2-env/
+*.egg-info/
 
 # Demo and output files
 *.dem
@@ -10,6 +11,12 @@ demo_env/
 
 # Output files
 out/
+data/
+broken_demos/
 
 # Python stuff
 __pycache__/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage

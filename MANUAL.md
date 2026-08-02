@@ -21,7 +21,7 @@ Generated GLB and JSON files are placed in the project's `out/` folder. A relati
 Install dependencies from the project directory:
 
 ```powershell
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
 awpy get tris
 ```
 
@@ -38,10 +38,10 @@ Long-running calculations show a terminal progress bar by default.
 
 ## Player vision
 
-Use `nvidia-warp-kimi.py` to export a GLB where red faces were seen during the time window and gray faces were not.
+Use `vision.py` to export a GLB where red faces were seen during the time window and gray faces were not.
 
 ```powershell
-python nvidia-warp-kimi.py match.dem --player "donk" --round 1 --start 1:00 --end 1:20 --out player_vision.glb
+python vision.py match.dem --player "donk" --round 1 --start 1:00 --end 1:20 --out player_vision.glb
 ```
 
 Time values are measured from the end of freeze time for the selected round. They accept seconds (`20`) or minutes and seconds (`1:20`).
@@ -49,7 +49,7 @@ Time values are measured from the end of freeze time for the selected round. The
 ### Useful player-vision options
 
 ```powershell
-python nvidia-warp-kimi.py match.dem --player "donk" --round 1 --start 0 --end 20 `
+python vision.py match.dem --player "donk" --round 1 --start 0 --end 20 `
   --fov 90 --tick-step 4 --samples-per-triangle 4 --min-visible-samples 1 `
   --out player_vision.glb --verbose
 ```
@@ -150,7 +150,7 @@ The mesh can be large. Give Blender time to import and avoid enabling expensive 
 These commands verify that each CLI loads and exposes its options:
 
 ```powershell
-python nvidia-warp-kimi.py --help
+python vision.py --help
 python flash-events.py --help
 python flash-coverage.py --help
 ```
@@ -158,7 +158,7 @@ python flash-coverage.py --help
 Compile all Python modules before a change:
 
 ```powershell
-python -m compileall -q cs2_visibility nvidia-warp-kimi.py flash-events.py flash-coverage.py
+python -m compileall -q cs2_visibility vision.py flash-events.py flash-coverage.py
 ```
 
 ### Real-demo smoke test
