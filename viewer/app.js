@@ -17,24 +17,27 @@ const appState = {
   playing: false,
   playbackStart: 0,
   playbackStartTick: 0,
-  placingFlash: false,
   analysisType: "vision",
   selectedFlashIndex: null,
+  manualFlashPosition: null,
   flashCamera: false,
   resultHistory: null,
   sessionResultIds: new Set(),
-  liveFlash: {
+  flashMover: {
     enabled: false,
-    dragging: false,
+    moving: false,
     finalizing: false,
-    pointerId: null,
-    pendingPointer: null,
-    pickInFlight: false,
+    keys: new Set(),
+    fast: false,
     previewInFlight: false,
     pendingPosition: null,
     debounceTimer: null,
+    settleTimer: null,
+    animationFrame: null,
+    lastFrameTime: 0,
     epoch: 0,
     revision: 0,
+    lastAppliedRevision: 0,
     previewVisible: false,
   },
 };
@@ -119,7 +122,7 @@ $("#player-marker-toggle").addEventListener("change", () => {
 bindTimeControl("#start-time", "#start-slider", true);
 bindTimeControl("#end-time", "#end-slider", false);
 $("#flash-source").addEventListener("change", () => {
-  setLiveFlashMode(false);
+  setMoveFlashMode(false);
   setFlashCameraMode(false);
   configureFlashSource();
 });
@@ -127,15 +130,7 @@ $("#focus-flash-toggle").addEventListener("change", () => {
   if ($("#focus-flash-toggle").checked && appState.analysisType === "flash" && !appState.flashCamera) focusSelectedFlash();
 });
 $("#flash-camera-button").addEventListener("click", () => setFlashCameraMode(!appState.flashCamera));
-$("#live-flash-toggle").addEventListener("change", (event) => setLiveFlashMode(event.target.checked));
-for (const selector of ["#flash-x", "#flash-y", "#flash-z"]) {
-  $(selector).addEventListener("input", previewManualFlash);
-}
-$("#place-flash-button").addEventListener("click", () => {
-  setLiveFlashMode(false);
-  setFlashCameraMode(false);
-  setPlacementMode(!appState.placingFlash);
-});
+$("#move-flash-button").addEventListener("click", () => setMoveFlashMode(!appState.flashMover.enabled));
 $("#analyze-vision-button").addEventListener("click", () => analyzeCurrentSelection("vision"));
 $("#analyze-flash-button").addEventListener("click", () => analyzeCurrentSelection("flash"));
 
@@ -147,56 +142,21 @@ $("#frame-slider").addEventListener("input", (event) => {
 $("#replay-mode").addEventListener("change", applyReplayFrame);
 $("#play-button").addEventListener("click", () => appState.playing ? stopPlayback() : startPlayback());
 
-canvas.addEventListener("click", async (event) => {
-  if (!appState.placingFlash || appState.liveFlash.enabled) return;
-  try {
-    const ray = renderer.getPickRay(event.clientX, event.clientY);
-    const response = await apiJson("/api/pick", { method: "POST", body: JSON.stringify(ray) });
-    if (!response.position) throw new Error("The placement ray did not hit the map.");
-    setManualPosition(response.position);
-    setPlacementMode(false);
-  } catch (error) {
-    showError(error);
-  }
-});
-
-canvas.addEventListener("pointerdown", (event) => {
-  const live = appState.liveFlash;
-  if (!live.enabled || live.finalizing || event.button !== 0) return;
-  event.preventDefault();
-  live.dragging = true;
-  live.pointerId = event.pointerId;
-  live.pendingPointer = { x: event.clientX, y: event.clientY, final: false, epoch: live.epoch };
-  canvas.setPointerCapture(event.pointerId);
-  processLiveFlashPicks();
-});
-
-canvas.addEventListener("pointermove", (event) => {
-  const live = appState.liveFlash;
-  if (!live.enabled || !live.dragging || event.pointerId !== live.pointerId) return;
-  event.preventDefault();
-  live.pendingPointer = { x: event.clientX, y: event.clientY, final: false, epoch: live.epoch };
-  processLiveFlashPicks();
-});
-
-const finishLivePointer = (event) => {
-  const live = appState.liveFlash;
-  if (!live.enabled || !live.dragging || event.pointerId !== live.pointerId) return;
-  event.preventDefault();
-  live.dragging = false;
-  live.pointerId = null;
-  live.pendingPointer = { x: event.clientX, y: event.clientY, final: true, epoch: live.epoch };
-  processLiveFlashPicks();
-};
-canvas.addEventListener("pointerup", finishLivePointer);
-canvas.addEventListener("pointercancel", finishLivePointer);
-
 window.addEventListener("keydown", (event) => {
-  if (event.key === "Escape" && appState.liveFlash.enabled) { setLiveFlashMode(false); return; }
-  if (event.key === "Escape" && appState.placingFlash) { setPlacementMode(false); return; }
+  if (event.key === "Escape" && appState.flashMover.enabled) { setMoveFlashMode(false); return; }
   if (event.key === "Escape" && appState.flashCamera) { setFlashCameraMode(false); return; }
-  if (event.target.matches("input, select, button")) return;
   const key = event.key.toLowerCase();
+  if (appState.flashMover.enabled && key === "shift") {
+    event.preventDefault();
+    appState.flashMover.fast = true;
+    return;
+  }
+  if (appState.flashMover.enabled && ["w", "a", "s", "d", "q", "e"].includes(key)) {
+    event.preventDefault();
+    if (!appState.flashMover.finalizing) beginFlashMovement(key, event.shiftKey);
+    return;
+  }
+  if (event.target.matches("input, select, button")) return;
   if (key === "o" && event.ctrlKey) { event.preventDefault(); chooseGlb(); }
   if (key === "f") { event.preventDefault(); renderer.frameSelection(); }
   if (key === "w" && event.shiftKey) { event.preventDefault(); clickToggle("#wireframe-button"); }
@@ -205,6 +165,18 @@ window.addEventListener("keydown", (event) => {
   if (key === "5") $("#projection-button").click();
   if (key === " ") { event.preventDefault(); $("#play-button").click(); }
 });
+
+window.addEventListener("keyup", (event) => {
+  const key = event.key.toLowerCase();
+  if (appState.flashMover.enabled && key === "shift") {
+    appState.flashMover.fast = false;
+    return;
+  }
+  if (!appState.flashMover.enabled || !["w", "a", "s", "d", "q", "e"].includes(key)) return;
+  event.preventDefault();
+  endFlashMovementKey(key);
+});
+window.addEventListener("blur", () => stopFlashMovement());
 
 for (const eventName of ["dragenter", "dragover"]) {
   window.addEventListener(eventName, (event) => {
@@ -248,9 +220,10 @@ async function loadSessionFile(file) {
 
 async function uploadAndLoad(file, endpoint, title) {
   stopPlayback();
-  setLiveFlashMode(false);
+  setMoveFlashMode(false);
   setFlashCameraMode(false);
   clearActiveResult();
+  appState.manualFlashPosition = null;
   appState.sessionResultIds.clear();
   setLoading(true, title, `${file.name} · ${formatBytes(file.size)}`, 0);
   try {
@@ -386,7 +359,7 @@ function selectFlash(index) {
 }
 
 function setAnalysisType(type) {
-  if (type !== "flash") setLiveFlashMode(false);
+  if (type !== "flash") setMoveFlashMode(false);
   appState.analysisType = type;
   for (const name of ["vision", "flash"]) {
     const button = $(`#${name}-tab`);
@@ -403,7 +376,6 @@ function setAnalysisType(type) {
   }
   else {
     setFlashCameraMode(false);
-    setPlacementMode(false);
     renderer.setMarker(null);
     if (appState.replay?.type === "vision") applyReplayFrame();
   }
@@ -441,7 +413,13 @@ function configureFlashSource() {
   const manual = $("#flash-source").value === "manual";
   $("#flash-event-field").hidden = manual;
   $("#manual-flash-controls").hidden = !manual;
-  if (manual) previewManualFlash(); else { setPlacementMode(false); previewSelectedFlash(); }
+  if (manual) {
+    ensureManualFlashPosition();
+    previewManualFlash();
+  } else {
+    setMoveFlashMode(false);
+    previewSelectedFlash();
+  }
 }
 
 function previewSelectedFlash() {
@@ -478,10 +456,10 @@ function focusSelectedFlash() {
 
 function setFlashCameraMode(enabled) {
   if (enabled) {
-    setLiveFlashMode(false);
+    setMoveFlashMode(false);
     const position = currentFlashPosition();
     if (!position) {
-      showError(new Error("Select a recorded flash or enter a manual position before entering flash camera mode."));
+      showError(new Error("Select a recorded flash or create a placed flash before entering flash camera mode."));
       return;
     }
     if ($("#projection-button").textContent !== "Perspective") $("#projection-button").click();
@@ -505,45 +483,50 @@ function setFlashCameraMode(enabled) {
   $("#flash-camera-button").textContent = "Enter flash camera";
 }
 
-function setLiveFlashMode(enabled) {
-  const live = appState.liveFlash;
+function setMoveFlashMode(enabled) {
+  const mover = appState.flashMover;
   if (enabled && (!appState.session || appState.analysisType !== "flash" || $("#flash-source").value !== "manual")) {
-    $("#live-flash-toggle").checked = false;
-    showError(new Error("Live flash coverage requires a loaded demo and Manual position as the flash source."));
+    showError(new Error("Move flash requires a loaded demo and Placed flash as the source."));
     return;
   }
-  if (enabled === live.enabled) {
-    $("#live-flash-toggle").checked = enabled;
-    return;
-  }
+  if (enabled === mover.enabled) return;
 
-  live.epoch++;
-  live.enabled = enabled;
-  live.dragging = false;
-  live.finalizing = false;
-  live.pointerId = null;
-  live.pendingPointer = null;
-  live.pendingPosition = null;
-  clearTimeout(live.debounceTimer);
-  live.debounceTimer = null;
-  $("#live-flash-toggle").checked = enabled;
-  viewport.classList.toggle("live-flash-active", enabled);
+  mover.epoch++;
+  mover.enabled = enabled;
+  mover.moving = false;
+  mover.finalizing = false;
+  mover.keys.clear();
+  mover.fast = false;
+  mover.lastAppliedRevision = 0;
+  mover.pendingPosition = null;
+  clearTimeout(mover.debounceTimer);
+  clearTimeout(mover.settleTimer);
+  mover.debounceTimer = null;
+  mover.settleTimer = null;
+  if (mover.animationFrame !== null) cancelAnimationFrame(mover.animationFrame);
+  mover.animationFrame = null;
+  const button = $("#move-flash-button");
+  button.classList.toggle("active", enabled);
+  button.setAttribute("aria-pressed", String(enabled));
+  button.textContent = enabled ? "Stop moving flash" : "Move flash";
+  viewport.classList.toggle("move-flash-active", enabled);
   renderer.setInteractionLocked(enabled);
 
   if (enabled) {
-    setPlacementMode(false);
     setFlashCameraMode(false);
-    setLiveFlashStatus("Drag the flash across map surfaces; release for the configured full-quality result.");
+    ensureManualFlashPosition();
+    renderer.focusPoint(appState.manualFlashPosition);
+    setMoveFlashStatus("Use WASD to move, Q/E for height, and Shift for faster movement.");
     canvas.focus();
   } else {
-    if (live.previewVisible) restoreActiveVisualization();
-    live.previewVisible = false;
-    setLiveFlashStatus("Drag the flash across map surfaces; release for the configured full-quality result.");
+    if (mover.previewVisible) restoreActiveVisualization();
+    mover.previewVisible = false;
+    setMoveFlashStatus("Enable movement, then use WASD to move and Q/E to change height. Hold Shift to move faster.");
   }
 }
 
-function setLiveFlashStatus(message) {
-  $("#live-flash-status").textContent = message;
+function setMoveFlashStatus(message) {
+  $("#move-flash-status").textContent = message;
 }
 
 function restoreActiveVisualization() {
@@ -552,56 +535,86 @@ function restoreActiveVisualization() {
   else renderer.clearFaceValues();
 }
 
-async function processLiveFlashPicks() {
-  const live = appState.liveFlash;
-  if (live.pickInFlight) return;
-  live.pickInFlight = true;
-  try {
-    while (live.pendingPointer) {
-      const target = live.pendingPointer;
-      live.pendingPointer = null;
-      if (!live.enabled || target.epoch !== live.epoch) continue;
-      let position = null;
-      try {
-        const ray = renderer.getPickRay(target.x, target.y);
-        const response = await apiJson("/api/pick", { method: "POST", body: JSON.stringify(ray) });
-        position = response.position;
-      } catch (error) {
-        if (target.epoch === live.epoch) showError(error);
-      }
-      if (!live.enabled || target.epoch !== live.epoch) continue;
-      if (position) {
-        setManualPosition(position);
-        live.revision++;
-        if (!target.final) scheduleLiveFlashPreview(position, target.epoch, live.revision);
-      } else {
-        setLiveFlashStatus("No map surface under the pointer.");
-      }
-      if (target.final) await finalizeLiveFlash(target.epoch);
-    }
-  } finally {
-    live.pickInFlight = false;
-    if (live.pendingPointer) processLiveFlashPicks();
+function beginFlashMovement(key, fast) {
+  const mover = appState.flashMover;
+  mover.keys.add(key);
+  mover.fast = Boolean(fast);
+  clearTimeout(mover.settleTimer);
+  mover.settleTimer = null;
+  if (mover.animationFrame === null) {
+    mover.lastFrameTime = 0;
+    mover.animationFrame = requestAnimationFrame(moveFlashFrame);
   }
 }
 
-function scheduleLiveFlashPreview(position, epoch, revision) {
-  const live = appState.liveFlash;
-  live.pendingPosition = { position: [...position], epoch, revision };
-  clearTimeout(live.debounceTimer);
-  live.debounceTimer = setTimeout(() => runLiveFlashPreview(), 180);
-  setLiveFlashStatus("Position updated; preparing quick preview…");
+function endFlashMovementKey(key) {
+  const mover = appState.flashMover;
+  mover.keys.delete(key);
+  if (!mover.keys.size) stopFlashMovement();
 }
 
-async function runLiveFlashPreview() {
-  const live = appState.liveFlash;
-  live.debounceTimer = null;
-  if (!live.enabled || live.finalizing || live.previewInFlight || !live.pendingPosition) return;
-  const pending = live.pendingPosition;
-  live.pendingPosition = null;
-  if (pending.epoch !== live.epoch) return;
-  live.previewInFlight = true;
-  setLiveFlashStatus("Calculating quick preview (1 sample per triangle)…");
+function stopFlashMovement() {
+  const mover = appState.flashMover;
+  mover.keys.clear();
+  mover.fast = false;
+  if (mover.animationFrame !== null) cancelAnimationFrame(mover.animationFrame);
+  mover.animationFrame = null;
+  if (!mover.enabled || !mover.moving || mover.finalizing) return;
+  mover.moving = false;
+  clearTimeout(mover.settleTimer);
+  const epoch = mover.epoch;
+  mover.settleTimer = setTimeout(() => finalizeFlashMovement(epoch), 350);
+  setMoveFlashStatus("Movement stopped; preparing the full-quality result…");
+}
+
+function moveFlashFrame(time) {
+  const mover = appState.flashMover;
+  mover.animationFrame = null;
+  if (!mover.enabled || mover.finalizing || !mover.keys.size) {
+    if (!mover.keys.size) stopFlashMovement();
+    return;
+  }
+  const deltaSeconds = mover.lastFrameTime ? Math.min((time - mover.lastFrameTime) / 1000, 0.05) : 0;
+  mover.lastFrameTime = time;
+  const { forward, right } = renderer.getMovementBasis();
+  let direction = [0, 0, 0];
+  if (mover.keys.has("w")) direction = direction.map((value, index) => value + forward[index]);
+  if (mover.keys.has("s")) direction = direction.map((value, index) => value - forward[index]);
+  if (mover.keys.has("d")) direction = direction.map((value, index) => value + right[index]);
+  if (mover.keys.has("a")) direction = direction.map((value, index) => value - right[index]);
+  if (mover.keys.has("e")) direction[2] += 1;
+  if (mover.keys.has("q")) direction[2] -= 1;
+  const length = Math.hypot(...direction);
+  if (length && deltaSeconds) {
+    const speed = 300 * (mover.fast ? 3 : 1);
+    const offset = direction.map((value) => value / length * speed * deltaSeconds);
+    const position = manualPosition().map((value, index) => value + offset[index]);
+    setManualPosition(position);
+    renderer.translateCamera(offset);
+    mover.moving = true;
+    mover.revision++;
+    queueFlashMovePreview(position, mover.epoch, mover.revision);
+  }
+  mover.animationFrame = requestAnimationFrame(moveFlashFrame);
+}
+
+function queueFlashMovePreview(position, epoch, revision) {
+  const mover = appState.flashMover;
+  mover.pendingPosition = { position: [...position], epoch, revision };
+  if (mover.previewInFlight || mover.debounceTimer !== null) return;
+  mover.debounceTimer = setTimeout(() => runFlashMovePreview(), 180);
+  setMoveFlashStatus("Moving flash; preparing a quick coverage preview…");
+}
+
+async function runFlashMovePreview() {
+  const mover = appState.flashMover;
+  mover.debounceTimer = null;
+  if (!mover.enabled || mover.finalizing || mover.previewInFlight || !mover.pendingPosition) return;
+  const pending = mover.pendingPosition;
+  mover.pendingPosition = null;
+  if (pending.epoch !== mover.epoch) return;
+  mover.previewInFlight = true;
+  setMoveFlashStatus("Calculating quick preview (1 sample per triangle)…");
   try {
     const job = await apiJson("/api/preview/flash", {
       method: "POST",
@@ -612,67 +625,68 @@ async function runLiveFlashPreview() {
     if (!response.ok) throw new Error("Could not load the live flash preview.");
     const buffer = await response.arrayBuffer();
     if (
-      live.enabled && live.dragging && !live.finalizing &&
-      pending.epoch === live.epoch && pending.revision === live.revision
+      mover.enabled && mover.moving && !mover.finalizing &&
+      pending.epoch === mover.epoch && pending.revision > mover.lastAppliedRevision
     ) {
-      installLiveFlashPreview(buffer, pending.position);
+      mover.lastAppliedRevision = pending.revision;
+      installFlashMovePreview(buffer, manualPosition());
     }
   } catch (error) {
-    if (pending.epoch === live.epoch && live.enabled) showError(error);
+    if (pending.epoch === mover.epoch && mover.enabled) showError(error);
   } finally {
-    live.previewInFlight = false;
-    if (live.enabled && live.dragging && !live.finalizing && live.pendingPosition) {
-      clearTimeout(live.debounceTimer);
-      live.debounceTimer = setTimeout(() => runLiveFlashPreview(), 180);
+    mover.previewInFlight = false;
+    if (mover.enabled && mover.moving && !mover.finalizing && mover.pendingPosition) {
+      mover.debounceTimer = setTimeout(() => runFlashMovePreview(), 180);
     }
   }
 }
 
-function installLiveFlashPreview(buffer, position) {
+function installFlashMovePreview(buffer, position) {
   const header = parseHeader(buffer, "CSF1");
   if (buffer.byteLength !== 24 + header.faceCount) throw new Error("Flash preview is truncated.");
   renderer.setFaceValues(new Uint8Array(buffer, 24, header.faceCount), "flash");
   renderer.setMarker(position);
-  appState.liveFlash.previewVisible = true;
-  setLiveFlashStatus("Quick preview shown. Keep dragging, or release for full quality.");
-  $("#status-summary").textContent = `Live flash preview · ${formatNumber(header.faceCount)} faces · 1 sample`;
+  appState.flashMover.previewVisible = true;
+  setMoveFlashStatus("Quick preview shown. Keep moving, or release the keys for full quality.");
+  $("#status-summary").textContent = `Moving flash preview · ${formatNumber(header.faceCount)} faces · 1 sample`;
 }
 
-async function finalizeLiveFlash(epoch) {
-  const live = appState.liveFlash;
-  if (!live.enabled || live.finalizing || epoch !== live.epoch) return;
+async function finalizeFlashMovement(epoch) {
+  const mover = appState.flashMover;
+  mover.settleTimer = null;
+  if (!mover.enabled || mover.finalizing || mover.keys.size || epoch !== mover.epoch) return;
   const position = manualPosition(false);
   if (!position) {
-    setLiveFlashStatus("Drag over a map surface before releasing.");
+    setMoveFlashStatus("The placed flash has no valid position.");
     return;
   }
-  live.finalizing = true;
-  live.revision++;
-  live.pendingPosition = null;
-  clearTimeout(live.debounceTimer);
-  live.debounceTimer = null;
-  setLiveFlashStatus(`Calculating full-quality result (${Number($("#flash-samples").value)} samples per triangle)…`);
+  mover.finalizing = true;
+  mover.revision++;
+  mover.pendingPosition = null;
+  clearTimeout(mover.debounceTimer);
+  mover.debounceTimer = null;
+  setMoveFlashStatus(`Calculating full-quality result (${Number($("#flash-samples").value)} samples per triangle)…`);
   try {
-    while (live.previewInFlight && live.enabled && epoch === live.epoch) {
+    while (mover.previewInFlight && mover.enabled && epoch === mover.epoch) {
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
-    if (!live.enabled || epoch !== live.epoch) return;
+    if (!mover.enabled || epoch !== mover.epoch) return;
     setLoading(true, "Analyzing flash coverage", "Running full-quality pass", 0);
     const job = await apiJson("/api/analyze/flash", {
       method: "POST",
       body: JSON.stringify(flashAnalysisRequest(position)),
     });
     const completed = await waitForJob(job.id);
-    if (!live.enabled || epoch !== live.epoch) return;
+    if (!mover.enabled || epoch !== mover.epoch) return;
     await refreshApplicationState(false);
     await loadResult(completed.resultId);
-    live.previewVisible = false;
-    setLiveFlashStatus("Full-quality result ready. Drag again for another analysis.");
+    mover.previewVisible = false;
+    setMoveFlashStatus("Full-quality result ready. Use WASD/QE to move it again.");
   } catch (error) {
-    if (epoch === live.epoch) showError(error);
+    if (epoch === mover.epoch) showError(error);
   } finally {
     setLoading(false);
-    if (epoch === live.epoch) live.finalizing = false;
+    if (epoch === mover.epoch) mover.finalizing = false;
   }
 }
 
@@ -686,25 +700,23 @@ function flashAnalysisRequest(position, samplesPerTriangle = Number($("#flash-sa
 }
 
 function setManualPosition(position) {
-  ["#flash-x", "#flash-y", "#flash-z"].forEach((selector, index) => { $(selector).value = position[index].toFixed(2); });
-  renderer.setMarker(position);
+  appState.manualFlashPosition = position.map(Number);
+  renderer.setMarker(appState.manualFlashPosition);
   renderer.setSelected("analysis-marker");
 }
 
 function manualPosition(required = true) {
-  const selectors = ["#flash-x", "#flash-y", "#flash-z"];
-  const values = selectors.map((selector) => Number($(selector).value));
-  const valid = values.every((value, index) => Number.isFinite(value) && $(selectors[index]).value !== "");
-  if (!valid && required) throw new Error("Enter an X, Y, and Z position or place the flash on the map.");
-  return valid ? values : null;
+  const position = appState.manualFlashPosition;
+  if (!position && required) throw new Error("Create the placed flash before analyzing it.");
+  return position ? [...position] : null;
 }
 
-function setPlacementMode(enabled) {
-  appState.placingFlash = enabled;
-  canvas.classList.toggle("placing", enabled);
-  $("#place-flash-button").classList.toggle("active", enabled);
-  $("#place-flash-button").textContent = enabled ? "Cancel placement" : "Place on map";
-  $("#placement-help").hidden = !enabled;
+function ensureManualFlashPosition() {
+  if (appState.manualFlashPosition) return appState.manualFlashPosition;
+  const selected = appState.session?.flashes.find((item) => item.index === appState.selectedFlashIndex)
+    || appState.session?.flashes[0];
+  setManualPosition(selected ? positionArray(selected.position) : renderer.getSceneCenter());
+  return appState.manualFlashPosition;
 }
 
 async function analyzeCurrentSelection(type) {
@@ -822,7 +834,7 @@ function installFlashResult(buffer, metadata) {
   renderer.setPlayerMarker(null);
   renderer.setFaceValues(appState.replay.values, "flash");
   renderer.setMarker(positionArray(metadata.flash.position));
-  appState.liveFlash.previewVisible = false;
+  appState.flashMover.previewVisible = false;
   $("#status-summary").textContent = `${formatNumber(header.faceCount)} faces · ${metadata.backend} · ${formatNumber(metadata.testedRays)} rays`;
 }
 
@@ -1089,7 +1101,7 @@ function renderResultDetails(result) {
 
 async function loadGlbFile(file) {
   if (!file.name.toLowerCase().endsWith(".glb")) return showError(new Error("Choose a .glb file."));
-  setLiveFlashMode(false);
+  setMoveFlashMode(false);
   setFlashCameraMode(false);
   clearActiveResult();
   setLoading(true, file.name, formatBytes(file.size));

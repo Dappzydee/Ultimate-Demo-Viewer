@@ -249,6 +249,24 @@ export class ViewerRenderer {
     this.requestRender();
   }
 
+  translateCamera(offset) {
+    this.camera.target = v3.add(this.camera.target, offset.map(Number));
+    this.requestRender();
+  }
+
+  getMovementBasis() {
+    const forward = this.#forwardDirection();
+    const planarForward = v3.normalize([forward[0], forward[1], 0]);
+    return {
+      forward: planarForward,
+      right: v3.normalize(v3.cross(planarForward, [0, 0, 1])),
+    };
+  }
+
+  getSceneCenter() {
+    return this.model ? boundsCenter(this.model.bounds) : [0, 0, 0];
+  }
+
   setFlashCamera(position) {
     if (position) {
       this.flashCameraPosition = position.map(Number);
@@ -621,6 +639,7 @@ export class ViewerRenderer {
       this.requestRender();
     }, { passive: false });
     this.canvas.addEventListener("keydown", (event) => {
+      if (this.interactionLocked) return;
       if (["w", "a", "s", "d", "q", "e"].includes(event.key.toLowerCase()) && !(event.shiftKey && event.key.toLowerCase() === "w")) {
         this.keys.add(event.key.toLowerCase());
         event.preventDefault();

@@ -62,16 +62,13 @@ h2 { margin: 0 0 10px; color: #aab3bd; font-size: 11px; letter-spacing: .09em; t
 .task-pane { min-width: 0; padding: 10px; border: 1px solid var(--line-soft); border-radius: 5px; background: #14181d; }
 .control-stack { display: grid; gap: 9px; }
 .mode-help { margin: -2px 0 1px; color: var(--muted); font-size: 10px; line-height: 1.45; }
-.time-grid, .coordinate-grid, .settings-grid { display: grid; gap: 7px; }
+.time-grid, .settings-grid { display: grid; gap: 7px; }
 .time-grid { grid-template-columns: 1fr 1fr; }
-.coordinate-grid { grid-template-columns: repeat(3, 1fr); }
 .settings-grid { grid-template-columns: 1fr 1fr; margin-top: 8px; }
 .wide-button { width: 100%; }
 details { border: 1px solid var(--line-soft); border-radius: 4px; padding: 7px; }
 summary { color: var(--muted); cursor: pointer; font-size: 11px; }
-#placement-help { display: block; margin-top: 6px; color: #ffd08c; }
-.live-flash-toggle { margin-top: 8px; }
-#live-flash-status { display: block; margin-top: 5px; }
+#move-flash-status { display: block; margin-top: 6px; }
 .flash-event-list { max-height: 310px; overflow-y: auto; border: 1px solid var(--line); border-radius: 4px; background: #11151a; }
 .flash-team { padding: 7px; }
 .flash-team + .flash-team { border-top: 1px solid var(--line); }
@@ -120,13 +117,12 @@ kbd { border: 1px solid #39424c; border-bottom-width: 2px; border-radius: 3px; b
 #viewport { position: relative; overflow: hidden; background: #15191f; }
 #viewport.flash-camera-active::before { content: ""; position: absolute; z-index: 3; inset: 0; box-shadow: inset 0 0 0 4px #f6d64a; pointer-events: none; }
 #viewport.flash-camera-active::after { content: "FLASH CAMERA"; position: absolute; z-index: 4; top: 10px; left: 10px; padding: 5px 8px; border: 1px solid #ffe878; border-radius: 3px; background: #332d12e8; color: #fff1a5; font-size: 10px; font-weight: 800; letter-spacing: .1em; pointer-events: none; }
-#viewport.live-flash-active::before { content: ""; position: absolute; z-index: 3; inset: 0; box-shadow: inset 0 0 0 4px #42c9e8; pointer-events: none; }
-#viewport.live-flash-active::after { content: "LIVE FLASH"; position: absolute; z-index: 4; top: 10px; left: 10px; padding: 5px 8px; border: 1px solid #70ddf5; border-radius: 3px; background: #102d35e8; color: #b9f3ff; font-size: 10px; font-weight: 800; letter-spacing: .1em; pointer-events: none; }
+#viewport.move-flash-active::before { content: ""; position: absolute; z-index: 3; inset: 0; box-shadow: inset 0 0 0 4px #42c9e8; pointer-events: none; }
+#viewport.move-flash-active::after { content: "MOVE FLASH · WASD + Q/E"; position: absolute; z-index: 4; top: 10px; left: 10px; padding: 5px 8px; border: 1px solid #70ddf5; border-radius: 3px; background: #102d35e8; color: #b9f3ff; font-size: 10px; font-weight: 800; letter-spacing: .1em; pointer-events: none; }
 #canvas { display: block; width: 100%; height: 100%; cursor: grab; }
 #viewport.flash-camera-active #canvas { cursor: crosshair; }
-#viewport.live-flash-active #canvas { cursor: crosshair; touch-action: none; }
+#viewport.move-flash-active #canvas { cursor: default; }
 #canvas.dragging { cursor: grabbing; }
-#canvas.placing { cursor: crosshair; }
 .viewport-badge { position: absolute; top: 10px; right: 10px; padding: 4px 6px; border: 1px solid #37404a; border-radius: 3px; background: #151a20cc; color: #86919c; font-size: 10px; letter-spacing: .08em; pointer-events: none; }
 .drop-zone { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; text-align: center; background: radial-gradient(circle at 50% 42%, #252c34 0, #161a20 46%, #111419 100%); }
 .drop-zone.dragover { box-shadow: inset 0 0 0 3px var(--accent); background: radial-gradient(circle at 50% 42%, #3a3227 0, #171b20 50%, #111419 100%); }
