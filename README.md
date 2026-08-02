@@ -12,12 +12,12 @@ python viewer.py
 
 The command opens a local browser window. Use **Open demo** or drop a `.dem` onto the app, then:
 
-1. Select a round and player.
-2. Choose instant vision, interval/replay vision, or flash coverage.
-3. Set the desired time or select a recorded flash grouped by team.
-4. Click **Analyze** and inspect the result immediately.
+1. Choose the exclusive **Vision** or **Flash** task tab.
+2. In Vision, select a round, player, and instant or interval/replay time.
+3. In Flash, select a recorded flash from the team-grouped list or place one manually.
+4. Click the task-specific **Analyze vision** or **Analyze flash** button and inspect the result immediately.
 
-The parsed demo, map geometry, interior face samples, and CPU/GPU raycaster remain available for repeated analyses. Vision replays can switch between the player's current view and accumulated visibility. Flash analysis supports demo events, manual XYZ positions, and clicking a map surface to place a flash.
+The parsed demo, map geometry, interior face samples, and CPU/GPU raycaster remain available for repeated analyses. Vision replays can switch between the player's current view and accumulated visibility. Flash analysis supports demo events, manual XYZ positions, and clicking a map surface to place a flash. Selecting a recorded flash can automatically focus it, and Flash camera places the viewpoint at its exact position for look-around inspection.
 
 You can also open a demo directly:
 

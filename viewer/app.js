@@ -3,6 +3,7 @@ import { ViewerRenderer } from "./renderer.js";
 
 const $ = (selector) => document.querySelector(selector);
 const canvas = $("#canvas");
+const viewport = $("#viewport");
 const dropZone = $("#drop-zone");
 const loading = $("#loading");
 const toast = $("#toast");
@@ -17,6 +18,9 @@ const appState = {
   playbackStart: 0,
   playbackStartTick: 0,
   placingFlash: false,
+  analysisType: "vision",
+  selectedFlashIndex: null,
+  flashCamera: false,
 };
 let toastTimer = null;
 
@@ -77,18 +81,35 @@ $("#projection-button").addEventListener("click", () => {
 
 for (const button of [$("#vision-tab"), $("#flash-tab")]) {
   button.addEventListener("click", () => setAnalysisType(button.dataset.analysis));
+  button.addEventListener("keydown", (event) => {
+    if (!["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(event.key)) return;
+    event.preventDefault();
+    const nextType = button.dataset.analysis === "vision" ? "flash" : "vision";
+    setAnalysisType(nextType);
+    $(`#${nextType}-tab`).focus();
+  });
 }
 $("#round-select").addEventListener("change", configureRound);
 $("#time-mode").addEventListener("change", configureTimeMode);
 bindTimeControl("#start-time", "#start-slider", true);
 bindTimeControl("#end-time", "#end-slider", false);
-$("#flash-source").addEventListener("change", configureFlashSource);
-$("#flash-event-select").addEventListener("change", previewSelectedFlash);
+$("#flash-source").addEventListener("change", () => {
+  setFlashCameraMode(false);
+  configureFlashSource();
+});
+$("#focus-flash-toggle").addEventListener("change", () => {
+  if ($("#focus-flash-toggle").checked && appState.analysisType === "flash" && !appState.flashCamera) focusSelectedFlash();
+});
+$("#flash-camera-button").addEventListener("click", () => setFlashCameraMode(!appState.flashCamera));
 for (const selector of ["#flash-x", "#flash-y", "#flash-z"]) {
   $(selector).addEventListener("input", previewManualFlash);
 }
-$("#place-flash-button").addEventListener("click", () => setPlacementMode(!appState.placingFlash));
-$("#analyze-button").addEventListener("click", analyzeCurrentSelection);
+$("#place-flash-button").addEventListener("click", () => {
+  setFlashCameraMode(false);
+  setPlacementMode(!appState.placingFlash);
+});
+$("#analyze-vision-button").addEventListener("click", () => analyzeCurrentSelection("vision"));
+$("#analyze-flash-button").addEventListener("click", () => analyzeCurrentSelection("flash"));
 
 $("#frame-slider").addEventListener("input", (event) => {
   stopPlayback();
@@ -113,6 +134,7 @@ canvas.addEventListener("click", async (event) => {
 
 window.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && appState.placingFlash) { setPlacementMode(false); return; }
+  if (event.key === "Escape" && appState.flashCamera) { setFlashCameraMode(false); return; }
   if (event.target.matches("input, select, button")) return;
   const key = event.key.toLowerCase();
   if (key === "o" && event.ctrlKey) { event.preventDefault(); chooseGlb(); }
@@ -166,6 +188,7 @@ async function loadSessionFile(file) {
 
 async function uploadAndLoad(file, endpoint, title) {
   stopPlayback();
+  setFlashCameraMode(false);
   setLoading(true, title, `${file.name} · ${formatBytes(file.size)}`, 0);
   try {
     const job = await apiJson(endpoint, {
@@ -230,37 +253,93 @@ function configureRound() {
 }
 
 function populateFlashes() {
-  const select = $("#flash-event-select");
-  select.replaceChildren();
+  const list = $("#flash-event-list");
+  list.replaceChildren();
   const flashes = appState.session.flashes || [];
+  if (!flashes.some((flash) => flash.index === appState.selectedFlashIndex)) {
+    appState.selectedFlashIndex = flashes[0]?.index ?? null;
+  }
   const groups = groupBy(flashes, (flash) => flash.thrower_team || flash.thrower_side || "Unknown team");
   for (const [team, values] of groups) {
-    const group = document.createElement("optgroup");
-    group.label = displayTeam(team);
+    const group = document.createElement("div");
+    group.className = "flash-team";
+    const heading = document.createElement("div");
+    heading.className = "flash-team-heading";
+    heading.textContent = displayTeam(team);
+    group.append(heading);
     for (const flash of values) {
       const round = appState.session.rounds.find((item) => item.number === flash.round_number);
       const seconds = round ? (flash.tick - round.freezeEndTick) / appState.session.tickRate : 0;
-      group.append(option(flash.index, `R${flash.round_number ?? "?"} · ${formatTime(seconds)} · ${flash.thrower || "Unknown"}`));
+      const button = document.createElement("button");
+      const selected = flash.index === appState.selectedFlashIndex;
+      button.className = `flash-event${selected ? " selected" : ""}`;
+      button.type = "button";
+      button.setAttribute("role", "option");
+      button.setAttribute("aria-selected", String(selected));
+      button.dataset.flashIndex = String(flash.index);
+
+      const player = document.createElement("span");
+      player.className = "flash-event-player";
+      player.textContent = flash.thrower || "Unknown player";
+      const time = document.createElement("span");
+      time.className = "flash-event-time";
+      time.textContent = `R${flash.round_number ?? "?"} · ${formatTime(seconds)}`;
+      const position = document.createElement("span");
+      position.className = "flash-event-position";
+      position.textContent = positionArray(flash.position).map((value) => Math.round(value)).join(", ");
+      button.append(player, time, position);
+      button.addEventListener("click", () => selectFlash(flash.index));
+      group.append(button);
     }
-    select.append(group);
+    list.append(group);
   }
-  if (!flashes.length) select.append(option("", "No flash detonations found"));
+  if (!flashes.length) {
+    const empty = document.createElement("div");
+    empty.className = "flash-event-empty";
+    empty.textContent = "No flash detonations were found in this demo.";
+    list.append(empty);
+  }
   previewSelectedFlash();
 }
 
+function selectFlash(index) {
+  appState.selectedFlashIndex = index;
+  for (const button of document.querySelectorAll(".flash-event")) {
+    const selected = Number(button.dataset.flashIndex) === index;
+    button.classList.toggle("selected", selected);
+    button.setAttribute("aria-selected", String(selected));
+  }
+  previewSelectedFlash();
+  if (appState.flashCamera) setFlashCameraMode(true);
+  else if ($("#focus-flash-toggle").checked) focusSelectedFlash();
+}
+
 function setAnalysisType(type) {
-  $("#vision-tab").classList.toggle("active", type === "vision");
-  $("#flash-tab").classList.toggle("active", type === "flash");
+  appState.analysisType = type;
+  for (const name of ["vision", "flash"]) {
+    const button = $(`#${name}-tab`);
+    const active = name === type;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", String(active));
+    button.tabIndex = active ? 0 : -1;
+  }
   $("#vision-controls").hidden = type !== "vision";
   $("#flash-controls").hidden = type !== "flash";
   if (type === "flash") configureFlashSource();
-  else { setPlacementMode(false); renderer.setMarker(null); }
+  else {
+    setFlashCameraMode(false);
+    setPlacementMode(false);
+    renderer.setMarker(null);
+  }
 }
 
 function configureTimeMode() {
   const instant = $("#time-mode").value === "instant";
   $("#end-time-field").hidden = instant;
   $("#end-slider").hidden = instant;
+  $("#time-mode-help").textContent = instant
+    ? "Analyze one snapshot at the nearest demo tick."
+    : "Analyze start to end, then replay current or accumulated visibility.";
 }
 
 function bindTimeControl(numberSelector, sliderSelector, isStart) {
@@ -290,20 +369,69 @@ function configureFlashSource() {
 }
 
 function previewSelectedFlash() {
-  if (!appState.session || $("#flash-source").value !== "event") return;
-  const flash = appState.session.flashes.find((item) => String(item.index) === $("#flash-event-select").value);
-  renderer.setMarker(flash ? positionArray(flash.position) : null);
+  if (!appState.session || appState.analysisType !== "flash" || $("#flash-source").value !== "event") return;
+  const flash = appState.session.flashes.find((item) => item.index === appState.selectedFlashIndex);
+  const position = flash ? positionArray(flash.position) : null;
+  renderer.setMarker(position);
+  if (position) renderer.setSelected("analysis-marker");
 }
 
 function previewManualFlash() {
-  if ($("#flash-source").value !== "manual") return;
+  if (appState.analysisType !== "flash" || $("#flash-source").value !== "manual") return;
   const position = manualPosition(false);
   renderer.setMarker(position);
+  if (position) {
+    renderer.setSelected("analysis-marker");
+    if (appState.flashCamera) renderer.setFlashCamera(position);
+  }
+}
+
+function currentFlashPosition() {
+  if (!appState.session || appState.analysisType !== "flash") return null;
+  if ($("#flash-source").value === "manual") return manualPosition(false);
+  const flash = appState.session.flashes.find((item) => item.index === appState.selectedFlashIndex);
+  return flash ? positionArray(flash.position) : null;
+}
+
+function focusSelectedFlash() {
+  const position = currentFlashPosition();
+  if (!position) return;
+  renderer.setSelected("analysis-marker");
+  renderer.focusPoint(position);
+}
+
+function setFlashCameraMode(enabled) {
+  if (enabled) {
+    const position = currentFlashPosition();
+    if (!position) {
+      showError(new Error("Select a recorded flash or enter a manual position before entering flash camera mode."));
+      return;
+    }
+    if ($("#projection-button").textContent !== "Perspective") $("#projection-button").click();
+    appState.flashCamera = true;
+    renderer.setSelected("analysis-marker");
+    renderer.setFlashCamera(position);
+    viewport.classList.add("flash-camera-active");
+    $("#projection-button").disabled = true;
+    $("#flash-camera-button").classList.add("active");
+    $("#flash-camera-button").setAttribute("aria-pressed", "true");
+    $("#flash-camera-button").textContent = "Exit flash camera";
+    canvas.focus();
+    return;
+  }
+  appState.flashCamera = false;
+  renderer.setFlashCamera(null);
+  viewport.classList.remove("flash-camera-active");
+  $("#projection-button").disabled = false;
+  $("#flash-camera-button").classList.remove("active");
+  $("#flash-camera-button").setAttribute("aria-pressed", "false");
+  $("#flash-camera-button").textContent = "Enter flash camera";
 }
 
 function setManualPosition(position) {
   ["#flash-x", "#flash-y", "#flash-z"].forEach((selector, index) => { $(selector).value = position[index].toFixed(2); });
   renderer.setMarker(position);
+  renderer.setSelected("analysis-marker");
 }
 
 function manualPosition(required = true) {
@@ -322,9 +450,9 @@ function setPlacementMode(enabled) {
   $("#placement-help").hidden = !enabled;
 }
 
-async function analyzeCurrentSelection() {
+async function analyzeCurrentSelection(type) {
   if (!appState.session) return;
-  const isVision = $("#vision-tab").classList.contains("active");
+  const isVision = type === "vision";
   try {
     let endpoint;
     let request;
@@ -344,12 +472,12 @@ async function analyzeCurrentSelection() {
     } else {
       endpoint = "/api/analyze/flash";
       const manual = $("#flash-source").value === "manual";
+      if (!manual && appState.selectedFlashIndex === null) throw new Error("Select a recorded flash to analyze.");
       request = {
-        roundNumber: Number($("#round-select").value),
         maxDistance: Number($("#flash-distance").value),
         falloffPower: Number($("#flash-falloff").value),
         samplesPerTriangle: Number($("#flash-samples").value),
-        ...(manual ? { position: manualPosition() } : { eventIndex: Number($("#flash-event-select").value) }),
+        ...(manual ? { position: manualPosition() } : { eventIndex: appState.selectedFlashIndex }),
       };
     }
     setLoading(true, isVision ? "Analyzing player vision" : "Analyzing flash coverage", "Preparing rays", 0);
@@ -494,6 +622,7 @@ function renderResultDetails(result) {
 
 async function loadGlbFile(file) {
   if (!file.name.toLowerCase().endsWith(".glb")) return showError(new Error("Choose a .glb file."));
+  setFlashCameraMode(false);
   setLoading(true, file.name, formatBytes(file.size));
   try {
     await installModel(await file.arrayBuffer(), file.name);

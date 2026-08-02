@@ -98,6 +98,7 @@ export class ViewerRenderer {
     this.showAxes = true;
     this.projection = "perspective";
     this.camera = { target: [0, 0, 0], yaw: Math.PI * 0.22, pitch: Math.PI * 0.24, distance: 10, orthoSize: 5 };
+    this.flashCameraPosition = null;
     this.sceneRadius = 10;
     this.lineResources = null;
     this.keys = new Set();
@@ -156,7 +157,11 @@ export class ViewerRenderer {
   setMarker(position, radius = 24) {
     if (this.markerResource) this.#disposeResource(this.markerResource);
     this.markerResource = null;
-    if (!position) { this.requestRender(); return; }
+    if (!position) {
+      if (this.selectedId === "analysis-marker") this.selectedId = null;
+      this.requestRender();
+      return;
+    }
     const [x, y, z] = position;
     const points = {
       top: [x, y, z + radius], bottom: [x, y, z - radius],
@@ -186,12 +191,31 @@ export class ViewerRenderer {
     this.requestRender();
   }
 
+  focusPoint(position, radius = 24) {
+    if (!position) return;
+    this.camera.target = position.map(Number);
+    this.camera.distance = Math.max(radius * 4, this.sceneRadius * 0.025);
+    this.camera.orthoSize = Math.max(radius * 2.5, this.sceneRadius * 0.015);
+    this.requestRender();
+  }
+
+  setFlashCamera(position) {
+    if (position) {
+      this.flashCameraPosition = position.map(Number);
+    } else if (this.flashCameraPosition) {
+      const previousPosition = this.flashCameraPosition;
+      this.flashCameraPosition = null;
+      this.focusPoint(previousPosition);
+    }
+    this.requestRender();
+  }
+
   getPickRay(clientX, clientY) {
     const rect = this.canvas.getBoundingClientRect();
     const ndcX = ((clientX - rect.left) / rect.width) * 2 - 1;
     const ndcY = 1 - ((clientY - rect.top) / rect.height) * 2;
     const eye = this.#eyePosition();
-    const forward = v3.normalize(v3.sub(this.camera.target, eye));
+    const forward = this.#forwardDirection();
     const right = v3.normalize(v3.cross(forward, [0, 0, 1]));
     const up = v3.normalize(v3.cross(right, forward));
     const aspect = Math.max(rect.width / Math.max(rect.height, 1), 0.01);
@@ -226,7 +250,9 @@ export class ViewerRenderer {
   }
 
   frameSelection() {
-    const selected = this.model?.drawables.find((item) => item.id === this.selectedId);
+    const selected = this.selectedId === "analysis-marker"
+      ? this.markerResource?.drawable
+      : this.model?.drawables.find((item) => item.id === this.selectedId);
     this.frameBounds(selected?.bounds || this.model?.bounds);
   }
 
@@ -265,7 +291,7 @@ export class ViewerRenderer {
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
 
     const eye = this.#eyePosition();
-    const view = lookAt(eye, this.camera.target, [0, 0, 1]);
+    const view = lookAt(eye, this.#viewTarget(), [0, 0, 1]);
     const aspect = width / height;
     const far = Math.max(this.sceneRadius * 20, this.camera.distance + this.sceneRadius * 5, 100);
     const near = Math.max(far / 100000, 0.01);
@@ -289,7 +315,9 @@ export class ViewerRenderer {
     uniformMatrix(gl, this.program, "u_viewProjection", viewProjection);
     gl.uniform1i(gl.getUniformLocation(this.program, "u_shading"), this.shading);
     gl.uniform1f(gl.getUniformLocation(this.program, "u_exposure"), this.exposure);
-    const drawResources = this.markerResource ? [...this.resources, this.markerResource] : this.resources;
+    const drawResources = this.markerResource && !this.flashCameraPosition
+      ? [...this.resources, this.markerResource]
+      : this.resources;
     for (const resource of drawResources) {
       const drawable = resource.drawable;
       if (!drawable.visible) continue;
@@ -451,6 +479,7 @@ export class ViewerRenderer {
   }
 
   #eyePosition() {
+    if (this.flashCameraPosition) return [...this.flashCameraPosition];
     const cp = Math.cos(this.camera.pitch);
     return v3.add(this.camera.target, [
       Math.cos(this.camera.yaw) * cp * this.camera.distance,
@@ -459,10 +488,20 @@ export class ViewerRenderer {
     ]);
   }
 
+  #forwardDirection() {
+    const cp = Math.cos(this.camera.pitch);
+    return [-Math.cos(this.camera.yaw) * cp, -Math.sin(this.camera.yaw) * cp, -Math.sin(this.camera.pitch)];
+  }
+
+  #viewTarget() {
+    if (!this.flashCameraPosition) return this.camera.target;
+    return v3.add(this.flashCameraPosition, this.#forwardDirection());
+  }
+
   #updateMovement(delta) {
-    if (!this.keys.size || !this.model) return false;
+    if (this.flashCameraPosition || !this.keys.size || !this.model) return false;
     const eye = this.#eyePosition();
-    const forward = v3.normalize(v3.sub(this.camera.target, eye));
+    const forward = this.#forwardDirection();
     const horizontalForward = v3.normalize([forward[0], forward[1], 0]);
     const right = v3.normalize(v3.cross(horizontalForward, [0, 0, 1]));
     let move = [0, 0, 0];
@@ -485,7 +524,8 @@ export class ViewerRenderer {
     this.canvas.addEventListener("pointerdown", (event) => {
       this.canvas.focus();
       this.canvas.setPointerCapture(event.pointerId);
-      drag = { x: event.clientX, y: event.clientY, mode: event.button === 0 && !event.shiftKey ? "orbit" : "pan" };
+      const mode = this.flashCameraPosition ? "look" : event.button === 0 && !event.shiftKey ? "orbit" : "pan";
+      drag = { x: event.clientX, y: event.clientY, mode };
       this.canvas.classList.add("dragging");
     });
     this.canvas.addEventListener("pointermove", (event) => {
@@ -493,7 +533,7 @@ export class ViewerRenderer {
       const dx = event.clientX - drag.x;
       const dy = event.clientY - drag.y;
       drag.x = event.clientX; drag.y = event.clientY;
-      if (drag.mode === "orbit") {
+      if (drag.mode === "orbit" || drag.mode === "look") {
         this.camera.yaw -= dx * 0.006;
         this.camera.pitch = Math.max(-Math.PI * .48, Math.min(Math.PI * .48, this.camera.pitch + dy * 0.006));
       } else {
@@ -511,6 +551,7 @@ export class ViewerRenderer {
     this.canvas.addEventListener("pointercancel", endDrag);
     this.canvas.addEventListener("wheel", (event) => {
       event.preventDefault();
+      if (this.flashCameraPosition) return;
       const factor = Math.exp(Math.sign(event.deltaY) * Math.min(Math.abs(event.deltaY), 200) * 0.0015);
       this.camera.distance = Math.max(this.sceneRadius * 0.0005, this.camera.distance * factor);
       this.camera.orthoSize = Math.max(this.sceneRadius * 0.0005, this.camera.orthoSize * factor);
