@@ -45,6 +45,7 @@ class PlayerPose:
     position: np.ndarray
     yaw_degrees: float
     pitch_degrees: float
+    origin_position: np.ndarray | None = None
 
 
 @dataclass(frozen=True)
@@ -73,6 +74,9 @@ class VisibilityTimelineResult:
     processed_poses: int
     tested_rays: int
     backend: str
+    positions: np.ndarray | None = None
+    yaws: np.ndarray | None = None
+    pitches: np.ndarray | None = None
 
     @property
     def seen_mask(self) -> np.ndarray:

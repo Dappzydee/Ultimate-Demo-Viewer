@@ -90,6 +90,7 @@ export class ViewerRenderer {
     this.model = null;
     this.resources = [];
     this.markerResource = null;
+    this.playerMarkerResource = null;
     this.selectedId = null;
     this.shading = 0;
     this.exposure = 1;
@@ -191,6 +192,54 @@ export class ViewerRenderer {
     this.requestRender();
   }
 
+  setPlayerMarker(position, yawDegrees = 0, visible = true) {
+    if (!position || !visible) {
+      if (this.playerMarkerResource) this.playerMarkerResource.drawable.visible = false;
+      if (this.selectedId === "player-marker") this.selectedId = null;
+      this.requestRender();
+      return;
+    }
+    if (!this.playerMarkerResource) {
+      const top = [0, 0, 72], bottom = [0, 0, 0];
+      const east = [14, 0, 36], west = [-14, 0, 36];
+      const north = [0, 14, 36], south = [0, -14, 36];
+      const tip = [42, 0, 54], left = [12, -9, 48], right = [12, 9, 48], crown = [12, 0, 65];
+      const triangles = [
+        [top, east, north], [top, north, west], [top, west, south], [top, south, east],
+        [bottom, north, east], [bottom, west, north], [bottom, south, west], [bottom, east, south],
+        [tip, left, right], [tip, right, crown], [tip, crown, left], [left, crown, right],
+      ];
+      const positions = new Float32Array(triangles.flat(2));
+      const colors = new Uint8Array((positions.length / 3) * 4);
+      for (let index = 0; index < colors.length; index += 4) colors.set([44, 211, 255, 255], index);
+      const drawable = {
+        id: "player-marker", name: "Player position",
+        position: { array: positions, count: positions.length / 3, components: 3, componentType: 5126, normalized: false },
+        color: { array: colors, count: positions.length / 3, components: 4, componentType: 5121, normalized: true },
+        indices: null,
+        worldMatrix: new Float32Array(16),
+        bounds: { min: [-14, -14, 0], max: [42, 14, 72] },
+        triangleCount: triangles.length, vertexCount: positions.length / 3,
+        baseColor: [1, 1, 1, 1], doubleSided: true, visible: true,
+      };
+      this.playerMarkerResource = this.#uploadDrawable(drawable);
+    }
+    const angle = Number(yawDegrees) * Math.PI / 180;
+    const cosine = Math.cos(angle), sine = Math.sin(angle);
+    const [x, y, z] = position.map(Number);
+    this.playerMarkerResource.drawable.worldMatrix.set([
+      cosine, sine, 0, 0,
+      -sine, cosine, 0, 0,
+      0, 0, 1, 0,
+      x, y, z, 1,
+    ]);
+    this.playerMarkerResource.drawable.bounds = {
+      min: [x - 42, y - 42, z], max: [x + 42, y + 42, z + 72],
+    };
+    this.playerMarkerResource.drawable.visible = true;
+    this.requestRender();
+  }
+
   focusPoint(position, radius = 24) {
     if (!position) return;
     this.camera.target = position.map(Number);
@@ -250,9 +299,9 @@ export class ViewerRenderer {
   }
 
   frameSelection() {
-    const selected = this.selectedId === "analysis-marker"
-      ? this.markerResource?.drawable
-      : this.model?.drawables.find((item) => item.id === this.selectedId);
+    const selected = this.selectedId === "analysis-marker" ? this.markerResource?.drawable
+      : this.selectedId === "player-marker" ? this.playerMarkerResource?.drawable
+        : this.model?.drawables.find((item) => item.id === this.selectedId);
     this.frameBounds(selected?.bounds || this.model?.bounds);
   }
 
@@ -315,9 +364,9 @@ export class ViewerRenderer {
     uniformMatrix(gl, this.program, "u_viewProjection", viewProjection);
     gl.uniform1i(gl.getUniformLocation(this.program, "u_shading"), this.shading);
     gl.uniform1f(gl.getUniformLocation(this.program, "u_exposure"), this.exposure);
-    const drawResources = this.markerResource && !this.flashCameraPosition
-      ? [...this.resources, this.markerResource]
-      : this.resources;
+    const drawResources = [...this.resources];
+    if (this.markerResource && !this.flashCameraPosition) drawResources.push(this.markerResource);
+    if (this.playerMarkerResource) drawResources.push(this.playerMarkerResource);
     for (const resource of drawResources) {
       const drawable = resource.drawable;
       if (!drawable.visible) continue;
@@ -459,7 +508,9 @@ export class ViewerRenderer {
     const gl = this.gl;
     for (const resource of this.resources) this.#disposeResource(resource);
     if (this.markerResource) this.#disposeResource(this.markerResource);
+    if (this.playerMarkerResource) this.#disposeResource(this.playerMarkerResource);
     this.markerResource = null;
+    this.playerMarkerResource = null;
     if (this.lineResources) {
       gl.deleteVertexArray(this.lineResources.vao);
       gl.deleteBuffer(this.lineResources.positionBuffer);

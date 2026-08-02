@@ -77,7 +77,11 @@ def load_demo_window(
     for row in rows.iter_rows(named=True):
         duck = float(row.get("duck_amount") or 0.0) if has_duck else 0.0
         height = eye_height + (crouch_eye_height - eye_height) * np.clip(duck, 0.0, 1.0)
-        poses.append(PlayerPose(int(row["tick"]), np.array((row["X"], row["Y"], row["Z"] + height), dtype=np.float64), float(row["yaw"]), float(row["pitch"])))
+        origin = np.array((row["X"], row["Y"], row["Z"]), dtype=np.float64)
+        poses.append(PlayerPose(
+            int(row["tick"]), origin + np.array((0, 0, height), dtype=np.float64),
+            float(row["yaw"]), float(row["pitch"]), origin,
+        ))
     return poses, str(map_name), tick_rate
 
 
@@ -253,6 +257,12 @@ class VisibilityAnalyzer:
             processed_poses=len(pose_list),
             tested_rays=ray_count,
             backend=self.raycaster.name,
+            positions=np.asarray([
+                pose.origin_position if pose.origin_position is not None else pose.position
+                for pose in pose_list
+            ], dtype=np.float32),
+            yaws=np.asarray([pose.yaw_degrees for pose in pose_list], dtype=np.float32),
+            pitches=np.asarray([pose.pitch_degrees for pose in pose_list], dtype=np.float32),
         )
 
 

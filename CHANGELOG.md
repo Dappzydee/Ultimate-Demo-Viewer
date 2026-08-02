@@ -2,6 +2,15 @@
 
 All notable, explicitly versioned changes to this project are recorded here.
 
+## 0.4.0 - 2026-08-02 - Player replay and analysis history
+
+- Added a toggleable player position marker and facing arrow that follow Vision replay frames.
+- Added reusable Analysis History entries with open, rename, pin, delete, GLB export, and session-selection actions.
+- Reused identical analysis requests and bounded unpinned history to 20 results with a 512 MB target.
+- Added multi-result `.cs2session` schema v2 while retaining schema-v1 compatibility.
+- Kept map geometry shared between results; history stores only compact masks, intensities, and replay poses.
+- Expanded automated coverage to eight passing tests; interactive browser validation remains unavailable in the current environment.
+
 ## 0.3.0 - 2026-08-02 - Integrated demo analysis viewer
 
 Status: integrated local application with automated server, session, and replay coverage; interactive browser validation remains pending where noted.

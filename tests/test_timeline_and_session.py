@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+from io import BytesIO
+import json
 import unittest
 import time
+import zipfile
 
 import numpy as np
 import trimesh
@@ -17,7 +21,7 @@ from cs2_visibility.interchange import (
 )
 from cs2_visibility.models import AnalysisConfig, PlayerPose
 from cs2_visibility.session import DemoSession, PlayerInfo, RoundInfo
-from viewer import ApplicationState
+from viewer import ApplicationState, StoredResult
 
 
 class AllVisibleRaycaster:
@@ -62,6 +66,13 @@ class VisibilityTimelineTests(unittest.TestCase):
         decoded = decode_visibility_timeline(encode_visibility_timeline(result))
         np.testing.assert_array_equal(decoded.ticks, [100, 104])
         np.testing.assert_array_equal(decoded.final_mask, [True, True])
+        np.testing.assert_array_equal(decoded.positions, np.zeros((2, 3)))
+        np.testing.assert_array_equal(decoded.yaws, [0, 90])
+        legacy = decode_visibility_timeline(encode_visibility_timeline(
+            replace(result, positions=None, yaws=None, pitches=None),
+        ))
+        self.assertIsNone(legacy.positions)
+        np.testing.assert_array_equal(legacy.final_mask, [True, True])
 
 
 class SessionArchiveTests(unittest.TestCase):
@@ -100,17 +111,36 @@ class SessionArchiveTests(unittest.TestCase):
         hit = restored.map_context.pick_surface(np.zeros(3), np.array([1, 0, 0]))
         np.testing.assert_allclose(hit, [9, 0, 0])
 
+    def test_schema_one_archive_remains_supported(self) -> None:
+        current = self.make_session().to_archive(
+            analysis_metadata={"analysisType": "flash", "source": "legacy"},
+            analysis_data=b"legacy-result",
+        )
+        legacy = BytesIO()
+        with zipfile.ZipFile(BytesIO(current), "r") as source, zipfile.ZipFile(legacy, "w") as target:
+            manifest = json.loads(source.read("manifest.json"))
+            manifest["schemaVersion"] = 1
+            manifest["analysis"] = manifest.pop("analyses")[0]
+            target.writestr("manifest.json", json.dumps(manifest))
+            target.writestr("poses.npz", source.read("poses.npz"))
+            target.writestr("geometry.npz", source.read("geometry.npz"))
+            target.writestr("analysis.bin", source.read("analyses/0.bin"))
+        reopened = DemoSession.from_archive_bytes(legacy.getvalue(), "legacy.cs2session")
+        self.assertEqual(reopened.saved_analysis_data, b"legacy-result")
+        self.assertEqual(reopened.saved_analysis_metadata["source"], "legacy")
+
     def test_application_job_reuses_the_loaded_session(self) -> None:
         session = self.make_session()
         session.map_context._raycasters[False] = AllVisibleRaycaster()
         state = ApplicationState()
         state.session = session
         try:
-            job = state.start_vision({
+            vision_request = {
                 "playerId": "steam:7", "roundNumber": 1, "timeMode": "instant",
                 "startSeconds": 1, "endSeconds": 1, "tickStep": 4,
                 "maxDistance": 30, "samplesPerTriangle": 1, "forceCpu": True,
-            })
+            }
+            job = state.start_vision(vision_request)
             for _ in range(100):
                 if job.status in {"complete", "error"}:
                     break
@@ -120,9 +150,16 @@ class SessionArchiveTests(unittest.TestCase):
             self.assertEqual(result.analysis_type, "vision")
             decoded = decode_visibility_timeline(result.data)
             self.assertEqual(decoded.face_count, 2)
+            np.testing.assert_allclose(decoded.positions, [[1, 2, 3]])
+            np.testing.assert_allclose(decoded.yaws, [90])
             self.assertEqual(result.metadata["playerName"], "Player")
             self.assertEqual(state.export_result_glb(job.result_id, "cumulative", None)[:4], b"glTF")
-            saved = state.export_session(job.result_id)
+            cached_job = state.start_vision(vision_request)
+            self.assertEqual(cached_job.status, "complete")
+            self.assertEqual(cached_job.result_id, job.result_id)
+            self.assertEqual(len(state.results), 1)
+
+            saved = state.export_session([job.result_id])
             reopened = DemoSession.from_archive_bytes(saved)
             self.assertEqual(reopened.saved_analysis_data, result.data)
 
@@ -139,6 +176,28 @@ class SessionArchiveTests(unittest.TestCase):
             self.assertEqual(flash_result.analysis_type, "flash")
             self.assertEqual(len(decode_flash_intensities(flash_result.data)), 2)
             self.assertEqual(state.export_result_glb(flash_job.result_id, "cumulative", None)[:4], b"glTF")
+            saved_history = state.export_session([job.result_id, flash_job.result_id])
+            reopened_history = DemoSession.from_archive_bytes(saved_history)
+            self.assertEqual(len(reopened_history.saved_analyses), 2)
+        finally:
+            state.close()
+
+    def test_history_evicts_old_unpinned_results_but_keeps_pins(self) -> None:
+        state = ApplicationState()
+        try:
+            pinned = StoredResult("pinned", "flash", {}, b"x", pinned=True)
+            state._store_result(pinned)
+            for index in range(21):
+                state._store_result(StoredResult(str(index), "flash", {}, b"x"))
+            self.assertIn("pinned", state.results)
+            self.assertNotIn("0", state.results)
+            self.assertEqual(sum(not result.pinned for result in state.results.values()), 20)
+            renamed = state.rename_result("1", "Useful flash")
+            self.assertEqual(renamed.public_metadata()["name"], "Useful flash")
+            state.set_result_pinned("1", True)
+            self.assertTrue(state.get_result("1").pinned)
+            state.delete_result("1")
+            self.assertNotIn("1", state.results)
         finally:
             state.close()
 

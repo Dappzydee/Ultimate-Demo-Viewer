@@ -48,6 +48,9 @@ class ViewerServerTests(unittest.TestCase):
             self.assertIn(b'id="flash-event-list"', application)
             self.assertIn(b'id="focus-flash-toggle"', application)
             self.assertIn(b'id="flash-camera-button"', application)
+            self.assertIn(b'id="player-marker-toggle"', application)
+            self.assertIn(b'id="history-list"', application)
+            self.assertIn(b'id="history-warning"', application)
             self.assertIn(b'id="analyze-vision-button"', application)
             self.assertIn(b'id="analyze-flash-button"', application)
         with urlopen(f"{self.base_url}/styles.css") as response:
@@ -59,6 +62,7 @@ class ViewerServerTests(unittest.TestCase):
             self.assertIn(b"focusPoint(position", renderer)
             self.assertIn(b"setFlashCamera(position", renderer)
             self.assertIn(b"this.flashCameraPosition", renderer)
+            self.assertIn(b"setPlayerMarker(position", renderer)
         with urlopen(f"{self.base_url}/model.glb") as response:
             self.assertEqual(response.headers["Content-Type"], "model/gltf-binary")
             self.assertEqual(response.read(), b"glTF-test-payload")

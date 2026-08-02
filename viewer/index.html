@@ -64,6 +64,10 @@
                 <div id="vision-controls" class="control-stack" role="tabpanel" aria-labelledby="vision-tab">
                   <label class="field">Round<select id="round-select"></select></label>
                   <label class="field">Player<select id="player-select"></select></label>
+                  <label class="toggle-field">
+                    <input id="player-marker-toggle" type="checkbox" checked>
+                    <span>Show player position and facing</span>
+                  </label>
                   <label class="field">Time mode
                     <select id="time-mode">
                       <option value="instant">Instant</option>
@@ -136,6 +140,16 @@
           <section id="result-section" hidden>
             <h2>Current result</h2>
             <dl id="result-details"></dl>
+          </section>
+
+          <section id="history-section" hidden>
+            <div class="section-heading">
+              <h2>Analysis history</h2>
+              <span id="history-usage" class="history-usage">0 B</span>
+            </div>
+            <div id="history-warning" class="history-warning" hidden></div>
+            <div id="history-list" class="history-list"></div>
+            <p class="history-help">Check results to include them in Save session. If none are checked, the current result is saved.</p>
           </section>
 
           <section>

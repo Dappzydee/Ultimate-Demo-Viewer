@@ -33,6 +33,8 @@ from cs2_visibility.session import DemoSession
 
 ROOT = Path(__file__).resolve().parent
 VIEWER_ROOT = ROOT / "viewer"
+MAX_UNPINNED_RESULTS = 20
+MAX_RESULT_BYTES = 512 * 1024 * 1024
 
 
 @dataclass
@@ -41,9 +43,19 @@ class StoredResult:
     analysis_type: str
     metadata: dict[str, Any]
     data: bytes
+    cache_key: str | None = None
+    pinned: bool = False
+    created_at: float = field(default_factory=time.time)
 
     def public_metadata(self) -> dict[str, Any]:
-        return {**self.metadata, "id": self.id, "analysisType": self.analysis_type}
+        return {
+            **self.metadata,
+            "id": self.id,
+            "analysisType": self.analysis_type,
+            "sizeBytes": len(self.data),
+            "createdAt": self.created_at,
+            "pinned": self.pinned,
+        }
 
 
 @dataclass
@@ -84,10 +96,85 @@ class ApplicationState:
 
     def public_state(self) -> dict[str, Any]:
         with self.lock:
+            total_bytes = sum(len(result.data) for result in self.results.values())
+            pinned_bytes = sum(len(result.data) for result in self.results.values() if result.pinned)
+            warning = None
+            if total_bytes > MAX_RESULT_BYTES:
+                warning = "Pinned or oversized results exceed the 512 MB history budget."
             return {
                 "session": self.session.metadata() if self.session else None,
                 "results": [result.public_metadata() for result in self.results.values()],
+                "resultHistory": {
+                    "totalBytes": total_bytes,
+                    "pinnedBytes": pinned_bytes,
+                    "maxBytes": MAX_RESULT_BYTES,
+                    "maxUnpinnedResults": MAX_UNPINNED_RESULTS,
+                    "warning": warning,
+                },
             }
+
+    @staticmethod
+    def _cache_key(analysis_type: str, values: dict[str, Any]) -> str:
+        return f"{analysis_type}:{json.dumps(values, sort_keys=True, separators=(',', ':'))}"
+
+    def _cached_job(self, kind: str, cache_key: str) -> AnalysisJob | None:
+        with self.lock:
+            cached = next((result for result in self.results.values() if result.cache_key == cache_key), None)
+            if cached is None:
+                return None
+            job = AnalysisJob(
+                uuid.uuid4().hex, kind, status="complete", progress=1.0,
+                message="Reused cached result", result_id=cached.id,
+            )
+            self.jobs[job.id] = job
+            return job
+
+    def _store_result(self, result: StoredResult) -> None:
+        with self.lock:
+            self.results[result.id] = result
+            self._evict_results(result.id)
+
+    def _evict_results(self, protected_id: str | None = None) -> None:
+        def remove_oldest_unpinned() -> bool:
+            candidate = next((
+                result_id for result_id, result in self.results.items()
+                if not result.pinned and result_id != protected_id
+            ), None)
+            if candidate is None:
+                return False
+            del self.results[candidate]
+            return True
+
+        while sum(not result.pinned for result in self.results.values()) > MAX_UNPINNED_RESULTS:
+            if not remove_oldest_unpinned():
+                break
+        while sum(len(result.data) for result in self.results.values()) > MAX_RESULT_BYTES:
+            if not remove_oldest_unpinned():
+                break
+
+    def set_result_pinned(self, result_id: str, pinned: bool) -> StoredResult:
+        with self.lock:
+            result = self.get_result(result_id)
+            result.pinned = bool(pinned)
+            if not result.pinned:
+                self._evict_results()
+            return result
+
+    def delete_result(self, result_id: str) -> None:
+        with self.lock:
+            self.get_result(result_id)
+            del self.results[result_id]
+
+    def rename_result(self, result_id: str, name: str) -> StoredResult:
+        clean_name = str(name).strip()
+        if not clean_name:
+            raise ValueError("Result name cannot be empty.")
+        if len(clean_name) > 80:
+            raise ValueError("Result name cannot exceed 80 characters.")
+        with self.lock:
+            result = self.get_result(result_id)
+            result.metadata["name"] = clean_name
+            return result
 
     def _has_active_job(self) -> bool:
         return any(job.status in {"queued", "running"} for job in self.jobs.values())
@@ -138,14 +225,19 @@ class ApplicationState:
         with self.lock:
             self.session = session
             self.results.clear()
-            if session.saved_analysis_metadata and session.saved_analysis_data:
-                metadata = dict(session.saved_analysis_metadata)
+            for saved_metadata, saved_data in session.saved_analyses:
+                metadata = dict(saved_metadata)
                 analysis_type = str(metadata.pop("analysisType"))
                 metadata.pop("id", None)
+                pinned = bool(metadata.pop("pinned", False))
+                created_at = float(metadata.pop("createdAt", time.time()))
+                metadata.pop("sizeBytes", None)
                 result_id = uuid.uuid4().hex
                 self.results[result_id] = StoredResult(
-                    result_id, analysis_type, metadata, session.saved_analysis_data,
+                    result_id, analysis_type, metadata, saved_data,
+                    pinned=pinned, created_at=created_at,
                 )
+            self._evict_results()
 
     def _require_session(self) -> DemoSession:
         if self.session is None:
@@ -154,34 +246,47 @@ class ApplicationState:
 
     def start_vision(self, request: dict[str, Any]) -> AnalysisJob:
         session = self._require_session()
+        time_mode = str(request.get("timeMode", "interval"))
+        instant = time_mode == "instant"
+        start_seconds = float(request.get("startSeconds", 0.0))
+        end_seconds = start_seconds if instant else float(request.get("endSeconds", start_seconds))
+        tick_step = int(request.get("tickStep", 4))
+        eye_height = float(request.get("eyeHeight", 64.0))
+        crouch_eye_height = float(request.get("crouchEyeHeight", 46.0))
+        player_id = str(request["playerId"])
+        round_number = int(request["roundNumber"])
+        config = AnalysisConfig(
+            horizontal_fov_degrees=float(request.get("fov", 90.0)),
+            max_distance=float(request.get("maxDistance", 4000.0)),
+            samples_per_triangle=int(request.get("samplesPerTriangle", 4)),
+            min_visible_samples=int(request.get("minVisibleSamples", 1)),
+            ray_batch_size=int(request.get("rayBatchSize", 250_000)),
+            prefer_gpu=not bool(request.get("forceCpu", False)),
+        )
+        cache_key = self._cache_key("vision", {
+            "playerId": player_id, "roundNumber": round_number, "timeMode": time_mode,
+            "startSeconds": start_seconds, "endSeconds": end_seconds, "tickStep": tick_step,
+            "eyeHeight": eye_height, "crouchEyeHeight": crouch_eye_height,
+            "config": asdict(config),
+        })
+        cached = self._cached_job("vision", cache_key)
+        if cached:
+            return cached
 
         def analyze(job: AnalysisJob) -> None:
-            time_mode = str(request.get("timeMode", "interval"))
-            instant = time_mode == "instant"
-            start_seconds = float(request.get("startSeconds", 0.0))
-            end_seconds = start_seconds if instant else float(request.get("endSeconds", start_seconds))
             poses = session.select_poses(
-                str(request["playerId"]), int(request["roundNumber"]), start_seconds, end_seconds,
-                instant=instant, tick_step=int(request.get("tickStep", 4)),
-                eye_height=float(request.get("eyeHeight", 64.0)),
-                crouch_eye_height=float(request.get("crouchEyeHeight", 46.0)),
-            )
-            config = AnalysisConfig(
-                horizontal_fov_degrees=float(request.get("fov", 90.0)),
-                max_distance=float(request.get("maxDistance", 4000.0)),
-                samples_per_triangle=int(request.get("samplesPerTriangle", 4)),
-                min_visible_samples=int(request.get("minVisibleSamples", 1)),
-                ray_batch_size=int(request.get("rayBatchSize", 250_000)),
-                prefer_gpu=not bool(request.get("forceCpu", False)),
+                player_id, round_number, start_seconds, end_seconds,
+                instant=instant, tick_step=tick_step,
+                eye_height=eye_height, crouch_eye_height=crouch_eye_height,
             )
             job.message = f"Analyzing {len(poses)} player poses"
             timeline = session.analyze_vision(
                 poses, config, self._job_progress(job, "Raycasting player vision"),
             )
-            player = next(item for item in session.players if item.id == str(request["playerId"]))
+            player = next(item for item in session.players if item.id == player_id)
             metadata = {
                 "timeMode": time_mode,
-                "roundNumber": int(request["roundNumber"]),
+                "roundNumber": round_number,
                 "playerId": player.id,
                 "playerName": player.name,
                 "startSeconds": start_seconds,
@@ -194,40 +299,51 @@ class ApplicationState:
                 "config": asdict(config),
             }
             result_id = uuid.uuid4().hex
-            self.results[result_id] = StoredResult(
-                result_id, "vision", metadata, encode_visibility_timeline(timeline),
-            )
+            self._store_result(StoredResult(
+                result_id, "vision", metadata, encode_visibility_timeline(timeline), cache_key=cache_key,
+            ))
             job.result_id = result_id
 
         return self._start_job("vision", analyze)
 
     def start_flash(self, request: dict[str, Any]) -> AnalysisJob:
         session = self._require_session()
+        event_index = int(request["eventIndex"]) if request.get("eventIndex") is not None else None
+        manual_position = None
+        if event_index is None:
+            position = request.get("position")
+            if not isinstance(position, list) or len(position) != 3:
+                raise ValueError("A manual flash requires an X/Y/Z position.")
+            manual_position = tuple(float(value) for value in position)
+        config = FlashCoverageConfig(
+            max_distance=float(request.get("maxDistance", 1500.0)),
+            samples_per_triangle=int(request.get("samplesPerTriangle", 4)),
+            falloff_power=float(request.get("falloffPower", 1.0)),
+            ray_batch_size=int(request.get("rayBatchSize", 250_000)),
+            prefer_gpu=not bool(request.get("forceCpu", False)),
+        )
+        cache_key = self._cache_key("flash", {
+            "eventIndex": event_index, "position": manual_position,
+            "roundNumber": request.get("roundNumber"), "tick": int(request.get("tick", 0)),
+            "config": asdict(config),
+        })
+        cached = self._cached_job("flash", cache_key)
+        if cached:
+            return cached
 
         def analyze(job: AnalysisJob) -> None:
-            if request.get("eventIndex") is not None:
-                event_index = int(request["eventIndex"])
+            if event_index is not None:
                 flash = next((item for item in session.flashes if item.index == event_index), None)
                 if flash is None:
                     raise ValueError(f"Flash event {event_index} does not exist in this session.")
                 source = "demo"
             else:
-                position = request.get("position")
-                if not isinstance(position, list) or len(position) != 3:
-                    raise ValueError("A manual flash requires an X/Y/Z position.")
                 flash = FlashDetonation(
                     index=-1, tick=int(request.get("tick", 0)),
-                    position=tuple(float(value) for value in position),
+                    position=manual_position,
                     map_name=session.map_name, round_number=request.get("roundNumber"), thrower="Manual placement",
                 )
                 source = "manual"
-            config = FlashCoverageConfig(
-                max_distance=float(request.get("maxDistance", 1500.0)),
-                samples_per_triangle=int(request.get("samplesPerTriangle", 4)),
-                falloff_power=float(request.get("falloffPower", 1.0)),
-                ray_batch_size=int(request.get("rayBatchSize", 250_000)),
-                prefer_gpu=not bool(request.get("forceCpu", False)),
-            )
             job.message = "Simulating flash coverage"
             coverage = session.analyze_flash(
                 flash, config, self._job_progress(job, "Raycasting flash coverage"),
@@ -241,9 +357,10 @@ class ApplicationState:
                 "config": asdict(config),
             }
             result_id = uuid.uuid4().hex
-            self.results[result_id] = StoredResult(
+            self._store_result(StoredResult(
                 result_id, "flash", metadata, encode_flash_intensities(coverage.intensities),
-            )
+                cache_key=cache_key,
+            ))
             job.result_id = result_id
 
         return self._start_job("flash", analyze)
@@ -275,14 +392,15 @@ class ApplicationState:
         flash = FlashDetonation.from_json_dict(result.metadata["flash"])
         return export_flash_coverage_bytes(session.mesh, intensities, flash)
 
-    def export_session(self, result_id: str | None) -> bytes:
+    def export_session(self, result_ids: list[str] | None) -> bytes:
         session = self._require_session()
-        if result_id is None:
+        if not result_ids:
             return session.to_archive()
-        result = self.get_result(result_id)
-        return session.to_archive(
-            analysis_metadata=result.public_metadata(), analysis_data=result.data,
-        )
+        analyses = []
+        for result_id in dict.fromkeys(result_ids):
+            result = self.get_result(result_id)
+            analyses.append((result.public_metadata(), result.data))
+        return session.to_archive(analyses=analyses)
 
     def pick(self, origin: list[float], direction: list[float]) -> list[float] | None:
         hit = self._require_session().map_context.pick_surface(
@@ -341,8 +459,7 @@ class ViewerRequestHandler(BaseHTTPRequestHandler):
                 )
                 return
             if path == "/api/session/export.cs2session":
-                result_id = query.get("result", [None])[0]
-                payload = self.server.app_state.export_session(result_id)
+                payload = self.server.app_state.export_session(query.get("result"))
                 self._send_bytes(
                     payload, "application/zip",
                     disposition='attachment; filename="analysis.cs2session"',
@@ -388,6 +505,24 @@ class ViewerRequestHandler(BaseHTTPRequestHandler):
             if path == "/api/analyze/flash":
                 job = self.server.app_state.start_flash(self._read_json())
                 self._send_json(job.to_json(), 202)
+                return
+            if path.startswith("/api/results/") and path.endswith("/pin"):
+                result_id = path.removeprefix("/api/results/").removesuffix("/pin").strip("/")
+                result = self.server.app_state.set_result_pinned(
+                    result_id, bool(self._read_json().get("pinned", True)),
+                )
+                self._send_json(result.public_metadata())
+                return
+            if path.startswith("/api/results/") and path.endswith("/delete"):
+                result_id = path.removeprefix("/api/results/").removesuffix("/delete").strip("/")
+                self._read_json()
+                self.server.app_state.delete_result(result_id)
+                self._send_json({"deleted": result_id})
+                return
+            if path.startswith("/api/results/") and path.endswith("/rename"):
+                result_id = path.removeprefix("/api/results/").removesuffix("/rename").strip("/")
+                result = self.server.app_state.rename_result(result_id, self._read_json().get("name", ""))
+                self._send_json(result.public_metadata())
                 return
             if path == "/api/pick":
                 request = self._read_json()

@@ -21,6 +21,8 @@ const appState = {
   analysisType: "vision",
   selectedFlashIndex: null,
   flashCamera: false,
+  resultHistory: null,
+  sessionResultIds: new Set(),
 };
 let toastTimer = null;
 
@@ -47,8 +49,13 @@ bindFileInput("#session-input", loadSessionFile);
 bindFileInput("#file-input", loadGlbFile);
 
 $("#save-session-button").addEventListener("click", () => {
-  const result = appState.activeResult ? `?result=${encodeURIComponent(appState.activeResult.id)}` : "";
-  download(`/api/session/export.cs2session${result}`);
+  const available = new Set(appState.results.map((result) => result.id));
+  const selected = [...appState.sessionResultIds].filter((resultId) => available.has(resultId));
+  if (!selected.length && appState.activeResult) selected.push(appState.activeResult.id);
+  const parameters = new URLSearchParams();
+  for (const resultId of selected) parameters.append("result", resultId);
+  const query = parameters.size ? `?${parameters}` : "";
+  download(`/api/session/export.cs2session${query}`);
 });
 $("#export-button").addEventListener("click", () => {
   if (!appState.activeResult) return;
@@ -91,6 +98,10 @@ for (const button of [$("#vision-tab"), $("#flash-tab")]) {
 }
 $("#round-select").addEventListener("change", configureRound);
 $("#time-mode").addEventListener("change", configureTimeMode);
+$("#player-marker-toggle").addEventListener("change", () => {
+  if (appState.replay?.type === "vision") applyReplayFrame();
+  else renderer.setPlayerMarker(null);
+});
 bindTimeControl("#start-time", "#start-slider", true);
 bindTimeControl("#end-time", "#end-slider", false);
 $("#flash-source").addEventListener("change", () => {
@@ -189,6 +200,8 @@ async function loadSessionFile(file) {
 async function uploadAndLoad(file, endpoint, title) {
   stopPlayback();
   setFlashCameraMode(false);
+  clearActiveResult();
+  appState.sessionResultIds.clear();
   setLoading(true, title, `${file.name} · ${formatBytes(file.size)}`, 0);
   try {
     const job = await apiJson(endpoint, {
@@ -197,7 +210,7 @@ async function uploadAndLoad(file, endpoint, title) {
       body: file,
     });
     await waitForJob(job.id);
-    await refreshApplicationState(true);
+    await refreshApplicationState(true, true);
   } catch (error) {
     showError(error);
   } finally {
@@ -205,14 +218,22 @@ async function uploadAndLoad(file, endpoint, title) {
   }
 }
 
-async function refreshApplicationState(loadGeometry = false) {
+async function refreshApplicationState(loadGeometry = false, loadLatestResult = false) {
+  const hadSession = Boolean(appState.session);
   const state = await apiJson("/api/state");
   appState.session = state.session;
   appState.results = state.results || [];
+  appState.resultHistory = state.resultHistory || null;
+  if (loadGeometry) appState.sessionResultIds.clear();
+  const availableResultIds = new Set(appState.results.map((result) => result.id));
+  for (const resultId of appState.sessionResultIds) {
+    if (!availableResultIds.has(resultId)) appState.sessionResultIds.delete(resultId);
+  }
   if (!appState.session) return;
-  installSessionControls();
+  if (loadGeometry || !hadSession) installSessionControls();
   if (loadGeometry) await loadUrl("/api/geometry.glb", appState.session.mapName);
-  const savedResult = appState.results.at(-1);
+  renderHistory();
+  const savedResult = loadLatestResult ? appState.results.at(-1) : null;
   if (savedResult) await loadResult(savedResult.id);
 }
 
@@ -325,11 +346,15 @@ function setAnalysisType(type) {
   }
   $("#vision-controls").hidden = type !== "vision";
   $("#flash-controls").hidden = type !== "flash";
-  if (type === "flash") configureFlashSource();
+  if (type === "flash") {
+    renderer.setPlayerMarker(null);
+    configureFlashSource();
+  }
   else {
     setFlashCameraMode(false);
     setPlacementMode(false);
     renderer.setMarker(null);
+    if (appState.replay?.type === "vision") applyReplayFrame();
   }
 }
 
@@ -509,24 +534,31 @@ async function loadResult(resultId) {
   if (!response.ok) throw new Error("Could not load the analysis result.");
   const buffer = await response.arrayBuffer();
   appState.activeResult = metadata;
+  setAnalysisType(metadata.analysisType);
   $("#export-button").disabled = false;
   $("#result-section").hidden = false;
   renderResultDetails(metadata);
   if (metadata.analysisType === "vision") installVisionReplay(buffer, metadata);
   else installFlashResult(buffer, metadata);
+  renderHistory();
 }
 
 function installVisionReplay(buffer, metadata) {
   const header = parseHeader(buffer, "CSV1");
   const ticksOffset = 24;
   const ticksBytes = header.frameCount * 4;
+  const posesOffset = ticksOffset + ticksBytes;
+  const posesBytes = header.frameCount * header.poseWidth * 4;
+  const masksOffset = posesOffset + posesBytes;
   const masksBytes = header.frameCount * header.width;
-  if (buffer.byteLength !== 24 + ticksBytes + masksBytes * 2) throw new Error("Vision result is truncated.");
+  if (buffer.byteLength !== masksOffset + masksBytes * 2) throw new Error("Vision result is truncated.");
   appState.replay = {
     type: "vision", faceCount: header.faceCount, frameCount: header.frameCount, width: header.width,
     ticks: new Uint32Array(buffer, ticksOffset, header.frameCount),
-    instant: new Uint8Array(buffer, ticksOffset + ticksBytes, masksBytes),
-    cumulative: new Uint8Array(buffer, ticksOffset + ticksBytes + masksBytes, masksBytes),
+    poseWidth: header.poseWidth,
+    poses: header.poseWidth ? new Float32Array(buffer, posesOffset, header.frameCount * header.poseWidth) : null,
+    instant: new Uint8Array(buffer, masksOffset, masksBytes),
+    cumulative: new Uint8Array(buffer, masksOffset + masksBytes, masksBytes),
     metadata,
   };
   renderer.setMarker(null);
@@ -544,6 +576,7 @@ function installFlashResult(buffer, metadata) {
   stopPlayback();
   $("#timeline").hidden = true;
   appState.replay = { type: "flash", faceCount: header.faceCount, values: new Uint8Array(buffer, 24, header.faceCount) };
+  renderer.setPlayerMarker(null);
   renderer.setFaceValues(appState.replay.values, "flash");
   renderer.setMarker(positionArray(metadata.flash.position));
   $("#status-summary").textContent = `${formatNumber(header.faceCount)} faces · ${metadata.backend} · ${formatNumber(metadata.testedRays)} rays`;
@@ -554,9 +587,14 @@ function parseHeader(buffer, expectedMagic) {
   const bytes = new Uint8Array(buffer, 0, 4);
   const magic = String.fromCharCode(...bytes);
   const view = new DataView(buffer);
-  if (magic !== expectedMagic || view.getUint32(4, true) !== 1) throw new Error("Unsupported analysis result format.");
+  const version = view.getUint32(4, true);
+  const validVersion = expectedMagic === "CSV1" ? version === 1 || version === 2 : version === 1;
+  if (magic !== expectedMagic || !validVersion) throw new Error("Unsupported analysis result format.");
+  const poseWidth = version >= 2 ? view.getUint32(20, true) : 0;
+  if (expectedMagic === "CSV1" && version >= 2 && poseWidth !== 5) throw new Error("Unsupported vision pose data.");
   return {
-    faceCount: view.getUint32(8, true), frameCount: view.getUint32(12, true), width: view.getUint32(16, true),
+    version, faceCount: view.getUint32(8, true), frameCount: view.getUint32(12, true),
+    width: view.getUint32(16, true), poseWidth,
   };
 }
 
@@ -572,6 +610,15 @@ function applyReplayFrame() {
     values[face] = ((source[offset + (face >> 3)] >> (face & 7)) & 1) ? 255 : 0;
   }
   renderer.setFaceValues(values, "vision");
+  if (replay.poses && $("#player-marker-toggle").checked && appState.analysisType === "vision") {
+    const poseOffset = appState.frame * replay.poseWidth;
+    renderer.setPlayerMarker(
+      [replay.poses[poseOffset], replay.poses[poseOffset + 1], replay.poses[poseOffset + 2]],
+      replay.poses[poseOffset + 3], true,
+    );
+  } else {
+    renderer.setPlayerMarker(null);
+  }
   $("#frame-slider").value = String(appState.frame);
   const round = appState.session.rounds.find((item) => item.number === replay.metadata.roundNumber);
   const seconds = round ? (replay.ticks[appState.frame] - round.freezeEndTick) / appState.session.tickRate : 0;
@@ -606,6 +653,182 @@ function stopPlayback() {
   $("#play-button").textContent = "Play";
 }
 
+function renderHistory() {
+  const section = $("#history-section");
+  if (!appState.session) {
+    section.hidden = true;
+    return;
+  }
+  section.hidden = false;
+  const history = appState.resultHistory;
+  $("#history-usage").textContent = history
+    ? `${formatBytes(history.totalBytes)} / ${formatBytes(history.maxBytes)}`
+    : formatBytes(appState.results.reduce((total, result) => total + (result.sizeBytes || 0), 0));
+  const warning = $("#history-warning");
+  warning.hidden = !history?.warning;
+  warning.textContent = history?.warning || "";
+
+  const list = $("#history-list");
+  list.replaceChildren();
+  if (!appState.results.length) {
+    const empty = document.createElement("div");
+    empty.className = "empty-copy";
+    empty.textContent = "Completed analyses will appear here.";
+    list.append(empty);
+    return;
+  }
+  for (const result of [...appState.results].reverse()) {
+    const row = document.createElement("div");
+    row.className = `history-row${appState.activeResult?.id === result.id ? " active" : ""}`;
+    const main = document.createElement("div");
+    main.className = "history-main";
+
+    const include = document.createElement("input");
+    include.type = "checkbox";
+    include.className = "history-save";
+    include.checked = appState.sessionResultIds.has(result.id);
+    include.title = "Include this result in Save session";
+    include.setAttribute("aria-label", "Include result in saved session");
+    include.addEventListener("change", () => {
+      if (include.checked) appState.sessionResultIds.add(result.id);
+      else appState.sessionResultIds.delete(result.id);
+    });
+
+    const copy = document.createElement("div");
+    copy.className = "history-copy";
+    const title = document.createElement("div");
+    title.className = "history-title";
+    title.textContent = historyResultTitle(result);
+    const meta = document.createElement("div");
+    meta.className = "history-meta";
+    meta.textContent = `${historyResultMeta(result)} · ${formatBytes(result.sizeBytes)}`;
+    copy.append(title, meta);
+
+    const pin = document.createElement("button");
+    pin.className = `history-pin${result.pinned ? " active" : ""}`;
+    pin.textContent = result.pinned ? "◆" : "◇";
+    pin.title = result.pinned ? "Unpin result" : "Pin result";
+    pin.setAttribute("aria-label", pin.title);
+    pin.setAttribute("aria-pressed", String(result.pinned));
+    pin.addEventListener("click", () => setResultPinned(result.id, !result.pinned));
+    main.append(include, copy, pin);
+
+    const actions = document.createElement("div");
+    actions.className = "history-actions";
+    const open = document.createElement("button");
+    open.textContent = appState.activeResult?.id === result.id ? "Current" : "Open";
+    open.disabled = appState.activeResult?.id === result.id;
+    open.addEventListener("click", () => openHistoryResult(result.id));
+    const exportButton = document.createElement("button");
+    exportButton.textContent = "Export GLB";
+    exportButton.addEventListener("click", () => exportHistoryResult(result));
+    const rename = document.createElement("button");
+    rename.textContent = "Rename";
+    rename.addEventListener("click", () => renameHistoryResult(result));
+    const remove = document.createElement("button");
+    remove.className = "history-delete";
+    remove.textContent = "×";
+    remove.title = "Delete result";
+    remove.setAttribute("aria-label", "Delete result");
+    remove.addEventListener("click", () => deleteHistoryResult(result.id));
+    actions.append(open, exportButton, rename, remove);
+    row.append(main, actions);
+    list.append(row);
+  }
+}
+
+function historyResultTitle(result) {
+  if (result.name) return result.name;
+  if (result.analysisType === "vision") return `Vision · ${result.playerName || "Unknown player"}`;
+  return `Flash · ${result.flash?.thrower || (result.source === "manual" ? "Manual placement" : "Unknown")}`;
+}
+
+function historyResultMeta(result) {
+  if (result.analysisType === "vision") {
+    const range = result.timeMode === "instant"
+      ? formatTime(result.startSeconds)
+      : `${formatTime(result.startSeconds)}–${formatTime(result.endSeconds)}`;
+    return `R${result.roundNumber} · ${range} · ${formatNumber(result.frameCount)} frame${result.frameCount === 1 ? "" : "s"}`;
+  }
+  return result.flash?.round_number ? `R${result.flash.round_number} · ${result.source}` : result.source;
+}
+
+async function openHistoryResult(resultId) {
+  setLoading(true, "Opening analysis", "Reading compact result");
+  try {
+    await loadResult(resultId);
+  } catch (error) {
+    showError(error);
+  } finally {
+    setLoading(false);
+  }
+}
+
+function exportHistoryResult(result) {
+  const parameters = new URLSearchParams();
+  if (result.analysisType === "vision" && appState.activeResult?.id === result.id) {
+    parameters.set("frame", String(appState.frame));
+    parameters.set("mode", $("#replay-mode").value);
+  }
+  const query = parameters.size ? `?${parameters}` : "";
+  download(`/api/results/${result.id}/export.glb${query}`);
+}
+
+async function setResultPinned(resultId, pinned) {
+  try {
+    await apiJson(`/api/results/${resultId}/pin`, {
+      method: "POST", body: JSON.stringify({ pinned }),
+    });
+    await refreshApplicationState(false);
+  } catch (error) {
+    showError(error);
+  }
+}
+
+async function deleteHistoryResult(resultId) {
+  try {
+    await apiJson(`/api/results/${resultId}/delete`, {
+      method: "POST", body: JSON.stringify({}),
+    });
+    const wasActive = appState.activeResult?.id === resultId;
+    appState.sessionResultIds.delete(resultId);
+    if (wasActive) clearActiveResult();
+    await refreshApplicationState(false);
+    if (wasActive && appState.results.length) await loadResult(appState.results.at(-1).id);
+  } catch (error) {
+    showError(error);
+  }
+}
+
+async function renameHistoryResult(result) {
+  const name = window.prompt("Result name", result.name || historyResultTitle(result));
+  if (name === null || !name.trim()) return;
+  try {
+    await apiJson(`/api/results/${result.id}/rename`, {
+      method: "POST", body: JSON.stringify({ name: name.trim() }),
+    });
+    await refreshApplicationState(false);
+    if (appState.activeResult?.id === result.id) {
+      appState.activeResult = appState.results.find((item) => item.id === result.id) || appState.activeResult;
+      renderResultDetails(appState.activeResult);
+    }
+  } catch (error) {
+    showError(error);
+  }
+}
+
+function clearActiveResult() {
+  stopPlayback();
+  appState.activeResult = null;
+  appState.replay = null;
+  $("#result-section").hidden = true;
+  $("#timeline").hidden = true;
+  $("#export-button").disabled = true;
+  renderer.clearFaceValues();
+  renderer.setMarker(null);
+  renderer.setPlayerMarker(null);
+}
+
 function renderResultDetails(result) {
   const details = $("#result-details");
   const rows = result.analysisType === "vision"
@@ -623,6 +846,7 @@ function renderResultDetails(result) {
 async function loadGlbFile(file) {
   if (!file.name.toLowerCase().endsWith(".glb")) return showError(new Error("Choose a .glb file."));
   setFlashCameraMode(false);
+  clearActiveResult();
   setLoading(true, file.name, formatBytes(file.size));
   try {
     await installModel(await file.arrayBuffer(), file.name);
@@ -776,13 +1000,13 @@ fetch("/viewer-config.json")
     if (config.startupJobId) {
       setLoading(true, "Loading input", "Starting", 0);
       await waitForJob(config.startupJobId);
-      await refreshApplicationState(true);
+      await refreshApplicationState(true, true);
       setLoading(false);
     } else if (config.modelUrl) {
       await loadUrl(config.modelUrl, config.modelName || "model.glb");
       setLoading(false);
     } else {
-      await refreshApplicationState(false);
+      await refreshApplicationState(false, true);
     }
   })
   .catch((error) => { setLoading(false); showError(error); });

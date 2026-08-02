@@ -80,6 +80,22 @@ summary { color: var(--muted); cursor: pointer; font-size: 11px; }
 .flash-event-time { color: #c4ccd4; font-variant-numeric: tabular-nums; }
 .flash-event-position { grid-column: 1 / -1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 10px; font-variant-numeric: tabular-nums; }
 .flash-event-empty { padding: 12px; color: var(--muted); line-height: 1.45; }
+.history-usage { color: var(--muted); font-size: 10px; font-variant-numeric: tabular-nums; }
+.history-warning { margin-bottom: 8px; padding: 7px; border: 1px solid #73562b; border-radius: 4px; background: #302512; color: #ffd797; font-size: 10px; line-height: 1.4; }
+.history-list { display: grid; gap: 6px; }
+.history-row { padding: 8px; border: 1px solid var(--line); border-radius: 5px; background: #14181d; }
+.history-row.active { border-color: #9e6a25; box-shadow: inset 3px 0 var(--accent); }
+.history-main { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: start; gap: 7px; }
+.history-save { width: 14px; height: 14px; margin: 2px 0 0; accent-color: var(--accent); }
+.history-copy { min-width: 0; }
+.history-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #dce2e8; font-weight: 650; }
+.history-meta { margin-top: 2px; color: var(--muted); font-size: 10px; line-height: 1.35; }
+.history-pin { width: 25px; min-height: 23px; padding: 1px; border: 0; background: transparent; color: #68737e; }
+.history-pin.active { background: transparent; border: 0; color: #ffd06f; }
+.history-actions { display: grid; grid-template-columns: 1fr 1fr 1fr 28px; gap: 5px; margin-top: 7px; }
+.history-actions button { min-height: 25px; padding: 3px 6px; font-size: 10px; }
+.history-delete { color: #ef9a9a; }
+.history-help { margin: 8px 0 0; color: var(--muted); font-size: 10px; line-height: 1.4; }
 
 .text-button { border: 0; background: transparent; color: var(--accent); padding: 0; min-height: auto; font-size: 11px; }
 .text-button:hover:not(:disabled) { background: transparent; color: #ffc16f; }

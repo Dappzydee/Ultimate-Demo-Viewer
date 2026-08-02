@@ -17,7 +17,9 @@ The command opens a local browser window. Use **Open demo** or drop a `.dem` ont
 3. In Flash, select a recorded flash from the team-grouped list or place one manually.
 4. Click the task-specific **Analyze vision** or **Analyze flash** button and inspect the result immediately.
 
-The parsed demo, map geometry, interior face samples, and CPU/GPU raycaster remain available for repeated analyses. Vision replays can switch between the player's current view and accumulated visibility. Flash analysis supports demo events, manual XYZ positions, and clicking a map surface to place a flash. Selecting a recorded flash can automatically focus it, and Flash camera places the viewpoint at its exact position for look-around inspection.
+The parsed demo, map geometry, interior face samples, and CPU/GPU raycaster remain available for repeated analyses. Identical requests reuse their existing result. Vision replays can switch between the player's current view and accumulated visibility while an optional position-and-facing marker follows the analyzed player. Flash analysis supports demo events, manual XYZ positions, and clicking a map surface to place a flash. Selecting a recorded flash can automatically focus it, and Flash camera places the viewpoint at its exact position for look-around inspection.
+
+Completed analyses appear in **Analysis history** and can be reopened, renamed, pinned, deleted, or exported as GLB. The app retains at most 20 unpinned results and targets a 512 MB result budget; pinned results are protected and produce a warning if they push history beyond the budget. Map geometry is not duplicated per result—the history contains only compact face masks/intensities and replay poses.
 
 You can also open a demo directly:
 
@@ -25,7 +27,7 @@ You can also open a demo directly:
 python viewer.py match.dem
 ```
 
-Use **Save session** to write a self-contained `.cs2session` containing normalized poses, events, geometry, and the current replay result. It reopens without the original demo and can run new analyses using the saved fields. Use **Export GLB** only when you want the current displayed frame as a portable snapshot.
+Use the checkboxes in Analysis history to choose which results **Save session** writes into a self-contained `.cs2session`; when none are checked, it saves the current result. The archive contains normalized poses, events, geometry, and the selected compact results, reopens without the original demo, and can run new analyses using the saved fields. Existing schema-v1 sessions with one saved result remain supported. Use **Export GLB** only when you want a displayed result or history entry as a portable snapshot.
 
 The app uses NVIDIA Warp automatically when CUDA is available, otherwise it falls back to CPU raycasting. CPU analysis of full-map or long windows can be slow.
 

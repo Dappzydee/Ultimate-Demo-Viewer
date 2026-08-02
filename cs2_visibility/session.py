@@ -21,7 +21,7 @@ from .models import AnalysisConfig, PlayerPose, VisibilityTimelineResult
 from .raycasting import create_raycaster
 
 
-SESSION_SCHEMA_VERSION = 1
+SESSION_SCHEMA_VERSION = 2
 ROUND_EVENTS = ["round_start", "round_freeze_end", "round_officially_ended", "flashbang_detonate"]
 
 
@@ -133,6 +133,7 @@ class DemoSession:
         self._geometry_glb: bytes | None = None
         self.saved_analysis_metadata: dict[str, Any] | None = None
         self.saved_analysis_data: bytes | None = None
+        self.saved_analyses: list[tuple[dict[str, Any], bytes]] = []
 
     @classmethod
     def from_demo(
@@ -340,13 +341,15 @@ class DemoSession:
             selected_ids = within[::tick_step]
         if not len(selected_ids):
             raise ValueError("No player poses exist inside the selected time window.")
-        positions = self.pose_positions[selected_ids].astype(np.float64, copy=True)
+        origins = self.pose_positions[selected_ids].astype(np.float64, copy=True)
+        positions = origins.copy()
         ducks = np.clip(self.pose_ducks[selected_ids].astype(np.float64), 0.0, 1.0)
         positions[:, 2] += eye_height + (crouch_eye_height - eye_height) * ducks
         return [
             PlayerPose(
                 int(self.pose_ticks[row_id]), positions[index],
                 float(self.pose_yaws[row_id]), float(self.pose_pitches[row_id]),
+                origins[index],
             )
             for index, row_id in enumerate(selected_ids)
         ]
@@ -376,8 +379,17 @@ class DemoSession:
 
     def to_archive(
         self, *, analysis_metadata: dict[str, Any] | None = None, analysis_data: bytes | None = None,
+        analyses: list[tuple[dict[str, Any], bytes]] | None = None,
     ) -> bytes:
-        """Save normalized poses, map geometry, and an optional replay result."""
+        """Save normalized poses, map geometry, and optional replay results."""
+        if analyses is not None and (analysis_metadata is not None or analysis_data is not None):
+            raise ValueError("Provide either analyses or one legacy analysis, not both.")
+        if analyses is None:
+            analyses = []
+            if analysis_metadata is not None or analysis_data is not None:
+                if analysis_metadata is None or analysis_data is None:
+                    raise ValueError("Analysis metadata and data must be provided together.")
+                analyses.append((analysis_metadata, analysis_data))
         manifest = {
             "schemaVersion": SESSION_SCHEMA_VERSION,
             "metadata": self.metadata(),
@@ -386,7 +398,7 @@ class DemoSession:
                 {"round": number, "player": player, **assignment}
                 for (number, player), assignment in self.round_players.items()
             ],
-            "analysis": analysis_metadata,
+            "analyses": [metadata for metadata, _ in analyses],
         }
         poses = BytesIO()
         np.savez_compressed(
@@ -403,8 +415,8 @@ class DemoSession:
             archive.writestr("manifest.json", json.dumps(manifest, separators=(",", ":")))
             archive.writestr("poses.npz", poses.getvalue(), compress_type=zipfile.ZIP_STORED)
             archive.writestr("geometry.npz", geometry.getvalue(), compress_type=zipfile.ZIP_STORED)
-            if analysis_metadata is not None and analysis_data is not None:
-                archive.writestr("analysis.bin", analysis_data, compress_type=zipfile.ZIP_DEFLATED)
+            for index, (_, data) in enumerate(analyses):
+                archive.writestr(f"analyses/{index}.bin", data, compress_type=zipfile.ZIP_DEFLATED)
         return output.getvalue()
 
     @classmethod
@@ -414,14 +426,24 @@ class DemoSession:
             if not required.issubset(archive.namelist()):
                 raise ValueError("Session archive is missing required data.")
             manifest = json.loads(archive.read("manifest.json"))
-            if manifest.get("schemaVersion") != SESSION_SCHEMA_VERSION:
+            schema_version = int(manifest.get("schemaVersion", 0))
+            if schema_version not in (1, SESSION_SCHEMA_VERSION):
                 raise ValueError("Unsupported session archive version.")
             metadata = manifest["metadata"]
             with np.load(BytesIO(archive.read("poses.npz")), allow_pickle=False) as poses:
                 pose_values = {name: poses[name].copy() for name in poses.files}
             with np.load(BytesIO(archive.read("geometry.npz")), allow_pickle=False) as geometry:
                 vertices, faces = geometry["vertices"].copy(), geometry["faces"].copy()
-            saved_analysis_data = archive.read("analysis.bin") if "analysis.bin" in archive.namelist() else None
+            saved_analyses: list[tuple[dict[str, Any], bytes]] = []
+            if schema_version == 1:
+                if manifest.get("analysis") is not None and "analysis.bin" in archive.namelist():
+                    saved_analyses.append((manifest["analysis"], archive.read("analysis.bin")))
+            else:
+                for index, analysis_metadata in enumerate(manifest.get("analyses", [])):
+                    analysis_path = f"analyses/{index}.bin"
+                    if analysis_path not in archive.namelist():
+                        raise ValueError(f"Session archive is missing {analysis_path}.")
+                    saved_analyses.append((analysis_metadata, archive.read(analysis_path)))
         players = [PlayerInfo(**value) for value in manifest["players"]]
         round_players = {
             (int(value["round"]), int(value["player"])): {
@@ -446,6 +468,7 @@ class DemoSession:
             flashes=[FlashDetonation.from_json_dict(value) for value in metadata.get("flashes", [])],
             mesh=trimesh.Trimesh(vertices=vertices, faces=faces, process=False),
         )
-        session.saved_analysis_metadata = manifest.get("analysis")
-        session.saved_analysis_data = saved_analysis_data
+        session.saved_analyses = saved_analyses
+        if saved_analyses:
+            session.saved_analysis_metadata, session.saved_analysis_data = saved_analyses[0]
         return session
