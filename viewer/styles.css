@@ -80,6 +80,10 @@ summary { color: var(--muted); cursor: pointer; font-size: 11px; }
 .flash-event-position { grid-column: 1 / -1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 10px; font-variant-numeric: tabular-nums; }
 .flash-event-empty { padding: 12px; color: var(--muted); line-height: 1.45; }
 .lineup-filter-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+.lineup-view-settings { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+.lineup-fov-field { grid-template-columns: 1fr auto; }
+.lineup-fov-field output { color: #d7dee5; font-variant-numeric: tabular-nums; }
+.lineup-fov-field input { grid-column: 1 / -1; width: 100%; }
 .lineup-list { max-height: 290px; overflow-y: auto; border: 1px solid var(--line); border-radius: 4px; background: #11151a; }
 .lineup-group { padding: 7px; }
 .lineup-group + .lineup-group { border-top: 1px solid var(--line); }
@@ -95,9 +99,12 @@ summary { color: var(--muted); cursor: pointer; font-size: 11px; }
 .lineup-detail p { margin: 0; color: #cbd4dc; font-size: 11px; line-height: 1.45; }
 .lineup-detail dl > div { grid-template-columns: 72px minmax(0, 1fr); padding: 2px 0; font-size: 10px; }
 .lineup-legend { display: flex; align-items: center; gap: 5px; color: var(--muted); font-size: 9px; text-transform: uppercase; letter-spacing: .04em; }
-.reference-dot, .release-dot { width: 8px; height: 8px; border-radius: 50%; }
+.reference-dot, .fixed-release-dot, .pin-pull-dot, .motion-release-dot, .detonation-dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; }
 .reference-dot { background: #2aaeff; }
-.release-dot { margin-left: 5px; background: #ff8930; }
+.fixed-release-dot { margin-left: 5px; background: #ff8930; }
+.pin-pull-dot { background: #a95cff; }
+.motion-release-dot { margin-left: 5px; background: #2aaeff; }
+.detonation-dot { margin-left: 5px; background: #ff404d; }
 .aim-line { width: 13px; height: 2px; margin-left: 5px; background: #ffd140; }
 .lineup-command-box { display: grid; gap: 3px; padding: 7px; border: 1px solid var(--line); border-radius: 4px; background: #0e1216; color: #b9e6c9; overflow-x: auto; }
 .lineup-command-box code { white-space: nowrap; font-size: 10px; }
@@ -150,6 +157,11 @@ kbd { border: 1px solid #39424c; border-bottom-width: 2px; border-radius: 3px; b
 #viewport.move-flash-active::after { content: "MOVE FLASH · WASD + Q/E"; position: absolute; z-index: 4; top: 10px; left: 10px; padding: 5px 8px; border: 1px solid #70ddf5; border-radius: 3px; background: #102d35e8; color: #b9f3ff; font-size: 10px; font-weight: 800; letter-spacing: .1em; pointer-events: none; }
 #viewport.lineup-camera-active::before { content: ""; position: absolute; z-index: 3; inset: 0; box-shadow: inset 0 0 0 4px #2aaeff; pointer-events: none; }
 #viewport.lineup-camera-active::after { content: "RECORDED LINEUP AIM"; position: absolute; z-index: 4; top: 10px; left: 10px; padding: 5px 8px; border: 1px solid #65c4ff; border-radius: 3px; background: #10283ae8; color: #c6ecff; font-size: 10px; font-weight: 800; letter-spacing: .1em; pointer-events: none; }
+#lineup-crosshair { display: none; position: absolute; z-index: 5; top: 50%; left: 50%; width: 30px; height: 30px; border: 1px solid #ffffffd9; border-radius: 50%; transform: translate(-50%, -50%); filter: drop-shadow(0 0 2px #000); pointer-events: none; }
+#lineup-crosshair::before, #lineup-crosshair::after { content: ""; position: absolute; top: 50%; left: 50%; background: #ffffffed; box-shadow: 0 0 2px #000; transform: translate(-50%, -50%); }
+#lineup-crosshair::before { width: 38px; height: 1px; }
+#lineup-crosshair::after { width: 1px; height: 38px; }
+#viewport.lineup-camera-active #lineup-crosshair { display: block; }
 #canvas { display: block; width: 100%; height: 100%; cursor: grab; }
 #viewport.flash-camera-active #canvas { cursor: crosshair; }
 #viewport.move-flash-active #canvas { cursor: default; }

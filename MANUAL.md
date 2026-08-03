@@ -17,7 +17,7 @@ python viewer.py
 
 Open or drop a `.dem`, then select Vision, Flash, or Lineups. Vision supports an instant timestamp or a start/end interval. Interval results include a timeline with current and accumulated visibility modes. Flash events are grouped by team; manual flashes can be entered as XYZ coordinates or placed by clicking the map. Lineups are detected automatically at load time and do not need a separate Analyze action.
 
-In **Lineups**, filter by round, grenade, player, or reference quality and select a throw. The viewport uses blue for the stand/reference marker, orange for release, cyan for movement, and yellow for recorded aim. **Frame** fits the complete approach, **View aim** enters the player's recorded eye position and angles, and Escape exits that view. The detail card provides movement instructions, classification, speed, warnings, and copyable console commands. Filtered records can be downloaded as JSON or CFG and are retained when saving a new `.cs2session`.
+In **Lineups**, filter by round, grenade, player, or reference quality and select a throw. Fixed throws keep blue stand/reference and orange release markers. In-motion throws instead show pin pull in purple and actual release in blue. Cyan traces movement, red marks the recorded detonation, and yellow shows the aim ray until its first map collision or the configured maximum distance. **Frame** fits the approach, **View aim** enters the player's recorded eye position and angles with a centered crosshair, and Escape exits that view. Aim distance and camera FOV are adjustable above the list. The detail card provides movement instructions, classification, speed, event ticks, warnings, and copyable console commands. Filtered records can be downloaded as JSON or CFG and are retained when saving a new `.cs2session`.
 
 Results remain in memory. **Export GLB** writes only the currently displayed snapshot. **Save session** creates a replayable `.cs2session` with normalized demo data, map geometry, and the current result; it can be reopened without the original `.dem`.
 
@@ -106,7 +106,7 @@ Use `grenade-lineups.py` when you want to reproduce throws rather than simulate 
 python grenade-lineups.py match.dem --json lineups.json --commands lineups.cfg
 ```
 
-The tool reads grenade `weapon_fire` events as release ticks, discovers the current demo's movement properties, and loads five seconds of player ticks before each release. It uses the last stationary stretch before sustained movement as the fixed reference only when pitch and wrapped yaw remain within five degrees of the release aim. If no such stretch exists, or aim drifts too far, `reference_point` is `null`, the approach is exported in `movement_path`, and the static commands use the release point.
+The tool reads grenade `weapon_fire` events as release ticks, discovers the current demo's movement properties, and loads five seconds of player ticks before each release. The first pose in the final continuous attack-button hold is retained as the pin-pull pose. Flash, HE, smoke, and inferno events are matched back to their releases to retain exact detonation positions. It uses the last stationary stretch before sustained movement as the fixed reference only when pitch and wrapped yaw remain within five degrees of the release aim. If no such stretch exists, or aim drifts too far, `reference_point` is `null`, the approach is exported in `movement_path`, and the static commands use the release point.
 
 Classification is exported on independent axes:
 

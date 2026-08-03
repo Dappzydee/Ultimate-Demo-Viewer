@@ -152,6 +152,14 @@
                     <input id="focus-lineup-toggle" type="checkbox" checked>
                     <span>Frame selected lineup</span>
                   </label>
+                  <div class="lineup-view-settings">
+                    <label class="field">Aim max distance
+                      <input id="lineup-aim-distance" type="number" min="100" max="20000" step="100" value="4000">
+                    </label>
+                    <label class="field lineup-fov-field">Camera FOV <output id="lineup-camera-fov-value" for="lineup-camera-fov">90&deg;</output>
+                      <input id="lineup-camera-fov" type="range" min="60" max="120" step="1" value="90">
+                    </label>
+                  </div>
                   <span class="hint">Lineups are detected automatically when a demo loads.</span>
                   <div id="lineup-availability" class="lineup-notice" hidden></div>
                   <div id="lineup-list" class="lineup-list" role="listbox" aria-label="Detected grenade lineups"></div>
@@ -160,7 +168,8 @@
                     <button id="export-lineups-cfg-button">Export filtered CFG</button>
                   </div>
                   <div id="lineup-detail" class="lineup-detail" hidden>
-                    <div class="lineup-legend"><span class="reference-dot"></span>Reference <span class="release-dot"></span>Release <span class="aim-line"></span>Aim</div>
+                    <div id="fixed-lineup-legend" class="lineup-legend"><span class="reference-dot"></span>Reference <span class="fixed-release-dot"></span>Release <span class="detonation-dot"></span>Detonation <span class="aim-line"></span>Aim</div>
+                    <div id="motion-lineup-legend" class="lineup-legend" hidden><span class="pin-pull-dot"></span>Pin pull <span class="motion-release-dot"></span>Release <span class="detonation-dot"></span>Detonation <span class="aim-line"></span>Aim</div>
                     <strong id="lineup-detail-title"></strong>
                     <p id="lineup-instruction"></p>
                     <dl id="lineup-details"></dl>
@@ -216,6 +225,7 @@
 
         <div id="viewport">
           <canvas id="canvas" tabindex="0" aria-label="3D model viewport"></canvas>
+          <div id="lineup-crosshair" aria-hidden="true"></div>
           <div class="viewport-badge">Z UP</div>
           <div id="drop-zone" class="drop-zone">
             <div class="drop-icon">DEM</div>

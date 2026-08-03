@@ -104,6 +104,7 @@ export class ViewerRenderer {
     this.camera = { target: [0, 0, 0], yaw: Math.PI * 0.22, pitch: Math.PI * 0.24, distance: 10, orthoSize: 5 };
     this.flashCameraPosition = null;
     this.lineupCameraPosition = null;
+    this.lineupCameraFov = Math.PI / 2;
     this.interactionLocked = false;
     this.sceneRadius = 10;
     this.lineResources = null;
@@ -253,13 +254,23 @@ export class ViewerRenderer {
     this.lineupBounds = null;
     if (!value) { this.requestRender(); return; }
 
+    const fixed = Boolean(value.fixed);
     const reference = value.reference?.map(Number) || null;
+    const pinPull = value.pinPull?.map(Number) || null;
     const release = value.release.map(Number);
+    const detonation = value.detonation?.map(Number) || null;
     if (reference) this.lineupMarkerResources.push(this.#createMarkerResource(
       "lineup-reference", "Lineup reference", reference, 22, [42, 174, 255, 255],
     ));
+    if (!fixed && pinPull) this.lineupMarkerResources.push(this.#createMarkerResource(
+      "lineup-pin-pull", "Grenade pin pull", pinPull, 20, [169, 92, 255, 255],
+    ));
     this.lineupMarkerResources.push(this.#createMarkerResource(
-      "lineup-release", "Grenade release", release, 18, [255, 137, 48, 255],
+      "lineup-release", "Grenade release", release, 18,
+      fixed ? [255, 137, 48, 255] : [42, 174, 255, 255],
+    ));
+    if (detonation) this.lineupMarkerResources.push(this.#createMarkerResource(
+      "lineup-detonation", "Grenade detonation", detonation, 24, [255, 64, 77, 255],
     ));
 
     const lines = [];
@@ -270,13 +281,14 @@ export class ViewerRenderer {
     }
     if (value.aim) {
       const origin = value.aim.origin.map(Number);
-      const yaw = Number(value.aim.yaw) * Math.PI / 180;
-      const pitch = Number(value.aim.pitch) * Math.PI / 180;
-      const direction = [Math.cos(pitch) * Math.cos(yaw), Math.cos(pitch) * Math.sin(yaw), -Math.sin(pitch)];
-      lines.push([origin, v3.add(origin, v3.scale(direction, 320)), [1.0, 0.82, 0.25, 1.0]]);
+      const endpoint = value.aim.endpoint.map(Number);
+      lines.push([origin, endpoint, [1.0, 0.82, 0.25, 1.0]]);
     }
     if (lines.length) this.lineupLineResource = this.#createLineResource(lines);
-    const points = [release, ...(reference ? [reference] : []), ...path];
+    const points = [
+      release, ...(reference ? [reference] : []), ...(pinPull ? [pinPull] : []),
+      ...(detonation ? [detonation] : []), ...path,
+    ];
     if (value.aim) points.push(value.aim.origin.map(Number));
     this.lineupBounds = {
       min: [0, 1, 2].map((axis) => Math.min(...points.map((point) => point[axis])) - 28),
@@ -299,6 +311,12 @@ export class ViewerRenderer {
       this.lineupCameraPosition = null;
       this.focusPoint(previousPosition);
     }
+    this.requestRender();
+  }
+
+  setLineupCameraFov(degrees) {
+    const value = Math.max(40, Math.min(140, Number(degrees)));
+    this.lineupCameraFov = value * Math.PI / 180;
     this.requestRender();
   }
 
@@ -431,7 +449,7 @@ export class ViewerRenderer {
     const near = Math.max(far / 100000, 0.01);
     const projection = this.projection === "orthographic"
       ? orthographic(this.camera.orthoSize, aspect, -far, far)
-      : perspective(Math.PI / 3, aspect, near, far);
+      : perspective(this.lineupCameraPosition ? this.lineupCameraFov : Math.PI / 3, aspect, near, far);
     const viewProjection = multiply(projection, view);
 
     if (this.lineResources && (this.showGrid || this.showAxes)) this.#drawReferenceLines(viewProjection);

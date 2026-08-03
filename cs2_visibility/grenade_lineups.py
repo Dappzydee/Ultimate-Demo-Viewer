@@ -54,6 +54,13 @@ VELOCITY_PROPERTIES = (
     "m_vecVelocity",
 )
 ROUND_EVENTS = ["round_start", "round_freeze_end", "round_end", "round_officially_ended"]
+DETONATION_EVENT_GRENADE_TYPES = {
+    "flashbang_detonate": ("flashbang",),
+    "hegrenade_detonate": ("hegrenade",),
+    "smokegrenade_detonate": ("smokegrenade",),
+    "inferno_startburn": ("molotov", "incendiary"),
+}
+DETONATION_EVENTS = tuple(DETONATION_EVENT_GRENADE_TYPES)
 
 
 @dataclass(frozen=True)
@@ -132,6 +139,16 @@ class GrenadeRelease:
 
 
 @dataclass(frozen=True)
+class GrenadeDetonation:
+    event_name: str
+    grenade_types: tuple[str, ...]
+    thrower_steamid: str
+    tick: int
+    position: tuple[float, float, float]
+    round_number: int | None = None
+
+
+@dataclass(frozen=True)
 class ThrowType:
     click: Literal["left", "right", "both", "unknown"]
     movement: Literal["standing", "walking", "running"]
@@ -170,6 +187,9 @@ class GrenadeLineup:
     setpos_command: str
     setang_command: str
     notes: tuple[str, ...]
+    pin_pull: ThrowPose | None = None
+    detonation_tick: int | None = None
+    detonation_position: tuple[float, float, float] | None = None
 
     def to_json_dict(self) -> dict[str, Any]:
         return {
@@ -179,6 +199,8 @@ class GrenadeLineup:
             "round": self.round_number,
             "T_release": self.release_tick,
             "release": self.release.point_dict(),
+            "pin_pull": self.pin_pull.point_dict() if self.pin_pull else None,
+            "T_pin_pull": self.pin_pull.tick if self.pin_pull else None,
             "reference_point": self.reference_point.point_dict() if self.reference_point else None,
             "reference_tick": self.reference_point.tick if self.reference_point else None,
             "has_fixed_reference": self.has_fixed_reference,
@@ -197,6 +219,15 @@ class GrenadeLineup:
             ),
             "setpos_command": self.setpos_command,
             "setang_command": self.setang_command,
+            "detonation": (
+                {
+                    "X": self.detonation_position[0],
+                    "Y": self.detonation_position[1],
+                    "Z": self.detonation_position[2],
+                }
+                if self.detonation_position else None
+            ),
+            "T_detonate": self.detonation_tick,
             "notes": list(self.notes),
         }
 
@@ -207,6 +238,8 @@ class GrenadeLineup:
         angle_value = value.get("reference_angle_delta")
         velocity_value = value.get("release_velocity") or {}
         throw_value = value["throw_type"]
+        pin_pull_value = value.get("pin_pull")
+        detonation_value = value.get("detonation")
         return cls(
             grenade_type=str(value["grenade_type"]),
             thrower_steamid=str(value["thrower_steamid"]),
@@ -237,6 +270,23 @@ class GrenadeLineup:
             setpos_command=str(value["setpos_command"]),
             setang_command=str(value["setang_command"]),
             notes=tuple(str(note) for note in value.get("notes", [])),
+            pin_pull=(
+                ThrowPose.from_point_dict(
+                    pin_pull_value,
+                    int(value["T_pin_pull"]) if value.get("T_pin_pull") is not None else release_tick,
+                )
+                if pin_pull_value else None
+            ),
+            detonation_tick=(
+                int(value["T_detonate"]) if value.get("T_detonate") is not None else None
+            ),
+            detonation_position=(
+                (
+                    float(detonation_value["X"]), float(detonation_value["Y"]),
+                    float(detonation_value["Z"]),
+                )
+                if detonation_value else None
+            ),
         )
 
 
@@ -273,6 +323,27 @@ def _click_type(samples: Sequence[ThrowPose]) -> Literal["left", "right", "both"
     if primary:
         return "left"
     return "unknown"
+
+
+def _pin_pull_pose(samples: Sequence[ThrowPose], release_tick: int) -> ThrowPose | None:
+    """Return the first pose in the final continuous grenade-prime button hold."""
+    attack_bits = IN_ATTACK | IN_ATTACK2
+    end_index = next((
+        index for index in range(len(samples) - 1, -1, -1)
+        if samples[index].button_mask is not None and int(samples[index].button_mask) & attack_bits
+    ), None)
+    if end_index is None or release_tick - samples[end_index].tick > 2:
+        return None
+    start_index = end_index
+    while start_index > 0:
+        previous = samples[start_index - 1]
+        current = samples[start_index]
+        if current.tick - previous.tick > 1:
+            break
+        if previous.button_mask is None or not int(previous.button_mask) & attack_bits:
+            break
+        start_index -= 1
+    return samples[start_index]
 
 
 def _fixed_reference_index(samples: Sequence[ThrowPose], horizontal_speeds: np.ndarray, config: GrenadeLineupConfig) -> int | None:
@@ -401,6 +472,7 @@ def derive_grenade_lineup(
         reference = None
     command_pose = reference if reference is not None else release.pose
     movement_path = () if fixed else _movement_path(ordered, config.path_tick_step)
+    pin_pull = _pin_pull_pose(ordered, release.release_tick)
 
     recent = ordered[-3:]
     click = _click_type(recent)
@@ -447,6 +519,7 @@ def derive_grenade_lineup(
         setpos_command=setpos,
         setang_command=setang,
         notes=tuple(notes),
+        pin_pull=pin_pull,
     )
 
 
@@ -567,6 +640,62 @@ def _round_for_tick(tick: int, rounds: Sequence[dict[str, Any]]) -> int | None:
     return None
 
 
+def grenade_detonations_from_events(
+    event_frames: dict[str, Any], rounds: Sequence[dict[str, Any]] = (),
+) -> list[GrenadeDetonation]:
+    """Normalize supported recorded detonation events for lineup matching."""
+    result: list[GrenadeDetonation] = []
+    for event_name, grenade_types in DETONATION_EVENT_GRENADE_TYPES.items():
+        frame = event_frames.get(event_name)
+        if frame is None or frame.is_empty():
+            continue
+        for row in frame.iter_rows(named=True):
+            tick = _optional_int(row.get("tick"))
+            steamid = _steamid(row.get("user_steamid"))
+            position = tuple(_finite_float(row.get(axis)) for axis in ("x", "y", "z"))
+            if tick is None or steamid is None or any(value is None for value in position):
+                continue
+            result.append(GrenadeDetonation(
+                event_name=event_name,
+                grenade_types=grenade_types,
+                thrower_steamid=steamid,
+                tick=tick,
+                position=tuple(float(value) for value in position),
+                round_number=_round_for_tick(tick, rounds) if rounds else None,
+            ))
+    return sorted(result, key=lambda item: item.tick)
+
+
+def attach_grenade_detonations(
+    lineups: Sequence[GrenadeLineup], detonations: Sequence[GrenadeDetonation],
+) -> list[GrenadeLineup]:
+    """Match each recorded pop/burn position to the corresponding release."""
+    result = list(lineups)
+    matched: set[int] = set()
+    for detonation in sorted(detonations, key=lambda item: item.tick):
+        candidates = [
+            index for index, lineup in enumerate(result)
+            if index not in matched
+            and lineup.thrower_steamid == detonation.thrower_steamid
+            and lineup.grenade_type in detonation.grenade_types
+            and lineup.release_tick <= detonation.tick
+            and (
+                detonation.round_number is None
+                or lineup.round_number is None
+                or lineup.round_number == detonation.round_number
+            )
+        ]
+        if not candidates:
+            continue
+        index = min(candidates, key=lambda value: result[value].release_tick)
+        result[index] = replace(
+            result[index], detonation_tick=detonation.tick,
+            detonation_position=detonation.position,
+        )
+        matched.add(index)
+    return result
+
+
 def extract_grenade_lineups(
     demo_path: Path,
     config: GrenadeLineupConfig,
@@ -586,7 +715,10 @@ def extract_grenade_lineups(
 
     player_props = ["X", "Y", "Z", "pitch", "yaw", "duck_amount"]
     player_props.extend(value for value in props.values() if value is not None)
-    weapon_events = demo.parse_events(["weapon_fire"], player_props=list(dict.fromkeys(player_props)))["weapon_fire"]
+    grenade_events = demo.parse_events(
+        ["weapon_fire", *DETONATION_EVENTS], player_props=list(dict.fromkeys(player_props)),
+    )
+    weapon_events = grenade_events["weapon_fire"]
     progress.update(1)
     round_events = demo.parse_events(ROUND_EVENTS)
     rounds = [row for row in create_round_df(round_events).iter_rows(named=True)]
@@ -659,6 +791,9 @@ def extract_grenade_lineups(
             result.append(derive_grenade_lineup(effective_release, history, config))
         except ValueError as error:
             LOGGER.warning("Skipping %s at tick %d: %s", release.grenade_type, release.release_tick, error)
+    result = attach_grenade_detonations(
+        result, grenade_detonations_from_events(grenade_events, rounds),
+    )
     progress.finish()
     LOGGER.debug("Derived %d lineups from %d grenade releases.", len(result), len(releases))
     return result

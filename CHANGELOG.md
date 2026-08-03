@@ -2,6 +2,16 @@
 
 All notable, explicitly versioned changes to this project are recorded here.
 
+## 0.7.0 - 2026-08-03 - Grenade lineup viewer
+
+- Added a dedicated **Lineups** analysis tab with round, grenade, player, and fixed/in-motion filters, grouped throw selection, detail cards, console-command copying, and filtered JSON/CFG export.
+- Added persistent lineup data to newly saved `.cs2session` archives while keeping older sessions readable and clearly reporting when lineup records are unavailable.
+- Added 3D lineup visualization with approach paths and distinct marker semantics: fixed throws retain blue reference/orange release markers, while in-motion throws show purple pin-pull and blue release markers.
+- Matched flash, HE, smoke, molotov, and incendiary events back to their releases and added red recorded-detonation markers plus detonation data in JSON/session exports.
+- Changed recorded aim rays to stop at the first map collision or a configurable maximum distance.
+- Added a centered lineup-camera crosshair and adjustable 60-120 degree FOV with a wider 90-degree default.
+- Validated the included Dust II demo with 324 lineups, 324 pin-pull poses, and 321 recorded detonations; all 19 automated tests pass.
+
 ## 0.6.0 - 2026-08-03 - Grenade lineup extraction
 
 - Added patch-aware detection of flashbang, smoke, HE, molotov, incendiary, decoy, tag, and snowball release events from CS2 demos.

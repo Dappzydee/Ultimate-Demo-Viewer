@@ -14,7 +14,7 @@ This repository is a local CS2 demo-analysis application plus reusable command-l
 - `raycasting.py`: the common CPU/NVIDIA Warp raycasting contract.
 - `flash_events.py`: normalized extraction of `flashbang_detonate` events and JSON interchange.
 - `flash_coverage.py`: hypothetical static-map flash coverage calculation and intensity GLB export.
-- `grenade_lineups.py`: patch-aware grenade release parsing plus pure stand/aim derivation, movement paths, throw classification, and JSON/command export.
+- `grenade_lineups.py`: patch-aware grenade release parsing plus pin-pull/detonation matching, pure stand/aim derivation, movement paths, throw classification, and JSON/command export.
 - `progress.py`: terminal progress and verbose logging helpers. Long-running calculations must use these rather than raw `print` calls.
 - `session.py`: persistent normalized demo data, cached geometry/raycasting state, surface picking, and `.cs2session` interchange.
 - `interchange.py`: packed binary vision timelines and quantized flash-result transport.

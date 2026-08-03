@@ -53,6 +53,9 @@ class ViewerServerTests(unittest.TestCase):
             self.assertIn(b'id="lineup-player-filter"', application)
             self.assertIn(b'id="lineup-reference-filter"', application)
             self.assertIn(b'id="lineup-camera-button"', application)
+            self.assertIn(b'id="lineup-aim-distance"', application)
+            self.assertIn(b'id="lineup-camera-fov"', application)
+            self.assertIn(b'id="lineup-crosshair"', application)
             self.assertIn(b'id="copy-lineup-commands-button"', application)
             self.assertIn(b'id="export-lineups-json-button"', application)
             self.assertIn(b'id="export-lineups-cfg-button"', application)
@@ -77,6 +80,7 @@ class ViewerServerTests(unittest.TestCase):
             self.assertIn(b"#viewport.flash-camera-active::before", stylesheet)
             self.assertIn(b"#viewport.move-flash-active::before", stylesheet)
             self.assertIn(b"#viewport.lineup-camera-active::before", stylesheet)
+            self.assertIn(b"#viewport.lineup-camera-active #lineup-crosshair", stylesheet)
             self.assertIn(b".lineup-row.selected", stylesheet)
         with urlopen(f"{self.base_url}/renderer.js") as response:
             renderer = response.read()
@@ -89,6 +93,9 @@ class ViewerServerTests(unittest.TestCase):
             self.assertIn(b"translateCamera(offset", renderer)
             self.assertIn(b"setLineupVisualization(value)", renderer)
             self.assertIn(b"setLineupCamera(pose)", renderer)
+            self.assertIn(b"setLineupCameraFov(degrees)", renderer)
+            self.assertIn(b'"lineup-pin-pull"', renderer)
+            self.assertIn(b'"lineup-detonation"', renderer)
             self.assertIn(b"frameLineup()", renderer)
         with urlopen(f"{self.base_url}/app.js") as response:
             application_script = response.read()

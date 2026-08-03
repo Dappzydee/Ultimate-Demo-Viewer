@@ -10,9 +10,11 @@ from cs2_visibility.grenade_lineups import (
     IN_ATTACK,
     IN_ATTACK2,
     IN_JUMP,
+    GrenadeDetonation,
     GrenadeLineupConfig,
     GrenadeRelease,
     ThrowPose,
+    attach_grenade_detonations,
     derive_grenade_lineup,
     discover_lineup_properties,
     export_lineup_commands,
@@ -74,7 +76,10 @@ class GrenadeLineupTests(unittest.TestCase):
         self.assertFalse(lineup.movement_path)
 
     def test_continuous_motion_uses_release_and_exports_path(self) -> None:
-        samples = [pose(tick, float(tick * 2)) for tick in range(7)]
+        samples = [
+            pose(tick, float(tick * 2), buttons=0 if tick < 2 else IN_ATTACK)
+            for tick in range(7)
+        ]
         lineup = derive_grenade_lineup(release(samples), samples, self.config)
         self.assertFalse(lineup.has_fixed_reference)
         self.assertIsNone(lineup.reference_point)
@@ -82,6 +87,20 @@ class GrenadeLineupTests(unittest.TestCase):
         self.assertEqual(lineup.movement_path, ((0.0, 2.0, 0.0), (4.0, 2.0, 0.0), (8.0, 2.0, 0.0), (12.0, 2.0, 0.0)))
         self.assertIn("in-motion throw", " ".join(lineup.notes))
         self.assertIn("exported approach path", lineup.movement_instruction)
+        self.assertEqual(lineup.pin_pull.tick, 2)
+
+    def test_attaches_and_round_trips_recorded_detonation(self) -> None:
+        samples = [pose(tick, float(tick * 2)) for tick in range(7)]
+        lineup = derive_grenade_lineup(release(samples), samples, self.config)
+        detonation = GrenadeDetonation(
+            "flashbang_detonate", ("flashbang",), "7", 12, (101.0, 202.0, 303.0), 3,
+        )
+        matched = attach_grenade_detonations([lineup], [detonation])[0]
+        self.assertEqual(matched.detonation_tick, 12)
+        self.assertEqual(matched.detonation_position, (101.0, 202.0, 303.0))
+        restored = type(matched).from_json_dict(matched.to_json_dict())
+        self.assertEqual(restored.pin_pull.tick, 0)
+        self.assertEqual(restored.detonation_position, matched.detonation_position)
 
     def test_angle_drift_rejects_otherwise_valid_reference(self) -> None:
         samples = [pose(tick, 0, yaw=90) for tick in range(4)]

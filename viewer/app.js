@@ -23,6 +23,7 @@ const appState = {
   manualFlashPosition: null,
   flashCamera: false,
   lineupCamera: false,
+  lineupAimRevision: 0,
   resultHistory: null,
   flashMover: {
     enabled: false,
@@ -142,6 +143,18 @@ $("#focus-lineup-toggle").addEventListener("change", () => {
 });
 $("#frame-lineup-button").addEventListener("click", () => renderer.frameLineup());
 $("#lineup-camera-button").addEventListener("click", () => setLineupCameraMode(!appState.lineupCamera));
+$("#lineup-aim-distance").addEventListener("change", () => {
+  const input = $("#lineup-aim-distance");
+  input.value = String(Math.max(100, Math.min(20000, Number(input.value) || 4000)));
+  const lineup = selectedLineup();
+  if (lineup && appState.analysisType === "lineup") showLineupVisualization(lineup);
+});
+$("#lineup-camera-fov").addEventListener("input", (event) => {
+  const degrees = Number(event.target.value);
+  $("#lineup-camera-fov-value").textContent = `${degrees}\u00b0`;
+  renderer.setLineupCameraFov(degrees);
+});
+renderer.setLineupCameraFov(Number($("#lineup-camera-fov").value));
 $("#copy-lineup-commands-button").addEventListener("click", copySelectedLineupCommands);
 $("#export-lineups-json-button").addEventListener("click", () => exportFilteredLineups("json"));
 $("#export-lineups-cfg-button").addEventListener("click", () => exportFilteredLineups("cfg"));
@@ -527,9 +540,11 @@ function selectLineup(index, shouldFrame = $("#focus-lineup-toggle").checked) {
   }
   renderLineupDetails(lineup);
   if (appState.analysisType !== "lineup") return;
-  showLineupVisualization(lineup);
+  const visualization = showLineupVisualization(lineup);
   if (appState.lineupCamera) setLineupCameraMode(true);
-  else if (shouldFrame) renderer.frameLineup();
+  else if (shouldFrame) visualization.then(() => {
+    if (selectedLineup() === lineup && appState.analysisType === "lineup") renderer.frameLineup();
+  });
 }
 
 function renderLineupDetails(lineup) {
@@ -539,10 +554,20 @@ function renderLineupDetails(lineup) {
   $("#lineup-setpos").textContent = lineup.setpos_command;
   $("#lineup-setang").textContent = lineup.setang_command;
   const speed = Math.hypot(Number(lineup.release_velocity.X), Number(lineup.release_velocity.Y));
+  $("#fixed-lineup-legend").hidden = !lineup.has_fixed_reference;
+  $("#motion-lineup-legend").hidden = lineup.has_fixed_reference;
   const rows = [
     ["Throw", lineup.throw_type.label],
     ["Release", `Tick ${lineup.T_release} · ${speed.toFixed(1)} u/s`],
     ["Reference", lineup.has_fixed_reference ? `Fixed · tick ${lineup.reference_tick}` : "In-motion fallback"],
+    ...(!lineup.has_fixed_reference ? [[
+      "Pin pull", lineup.T_pin_pull === null || lineup.T_pin_pull === undefined
+        ? "Unavailable" : `Tick ${lineup.T_pin_pull}`,
+    ]] : []),
+    [
+      "Detonation", lineup.T_detonate === null || lineup.T_detonate === undefined
+        ? "Unavailable" : `Tick ${lineup.T_detonate}`,
+    ],
     ["Notes", (lineup.notes || []).join("; ") || "No warnings"],
   ];
   $("#lineup-details").replaceChildren(...rows.map(([key, value]) => {
@@ -566,14 +591,46 @@ function lineupViewPose(lineup) {
   return { position, yaw: Number(pose.yaw), pitch: Number(pose.pitch) };
 }
 
-function showLineupVisualization(lineup) {
+function lineupAimDirection(view) {
+  const yaw = view.yaw * Math.PI / 180;
+  const pitch = view.pitch * Math.PI / 180;
+  return [Math.cos(pitch) * Math.cos(yaw), Math.cos(pitch) * Math.sin(yaw), -Math.sin(pitch)];
+}
+
+async function showLineupVisualization(lineup) {
+  const revision = ++appState.lineupAimRevision;
   const view = lineupViewPose(lineup);
-  renderer.setLineupVisualization({
+  const direction = lineupAimDirection(view);
+  const maxDistance = Math.max(100, Math.min(20000, Number($("#lineup-aim-distance").value) || 4000));
+  const cappedEndpoint = view.position.map((value, axis) => value + direction[axis] * maxDistance);
+  const visualization = {
+    fixed: Boolean(lineup.has_fixed_reference),
     reference: lineup.reference_point ? lineupPosePosition(lineup.reference_point) : null,
+    pinPull: lineup.pin_pull ? lineupPosePosition(lineup.pin_pull) : null,
     release: lineupPosePosition(lineup.release),
+    detonation: lineup.detonation ? lineupPosePosition(lineup.detonation) : null,
     path: (lineup.movement_path || []).map(lineupPosePosition),
-    aim: { origin: view.position, yaw: view.yaw, pitch: view.pitch },
-  });
+    aim: { origin: view.position, endpoint: cappedEndpoint },
+  };
+  renderer.setLineupVisualization(visualization);
+  try {
+    const result = await apiJson("/api/pick", {
+      method: "POST", body: JSON.stringify({ origin: view.position, direction }),
+    });
+    if (
+      revision !== appState.lineupAimRevision
+      || appState.analysisType !== "lineup"
+      || selectedLineup() !== lineup
+    ) return;
+    if (result.position) {
+      const hit = result.position.map(Number);
+      const distance = Math.hypot(...hit.map((value, axis) => value - view.position[axis]));
+      if (distance <= maxDistance) visualization.aim.endpoint = hit;
+    }
+    renderer.setLineupVisualization(visualization);
+  } catch (error) {
+    console.warn("Could not intersect lineup aim ray with the map; using the configured cap.", error);
+  }
 }
 
 function setLineupCameraMode(enabled) {

@@ -18,14 +18,17 @@ from .flash_coverage import FlashCoverageAnalyzer, FlashCoverageConfig, FlashCov
 from .flash_events import FlashDetonation, _first_value
 from .geometry import export_glb_bytes, interior_sample_points, load_tri_mesh
 from .grenade_lineups import (
+    DETONATION_EVENTS,
     GRENADE_WEAPONS,
     GrenadeLineup,
     GrenadeLineupConfig,
     GrenadeRelease,
     _pose_from_row,
     _steamid,
+    attach_grenade_detonations,
     derive_grenade_lineup,
     discover_lineup_properties,
+    grenade_detonations_from_events,
 )
 from .models import AnalysisConfig, PlayerPose, VisibilityTimelineResult
 from .raycasting import create_raycaster
@@ -34,7 +37,7 @@ from .raycasting import create_raycaster
 SESSION_SCHEMA_VERSION = 2
 ROUND_EVENTS = [
     "round_start", "round_freeze_end", "round_officially_ended",
-    "flashbang_detonate", "weapon_fire",
+    "weapon_fire", *DETONATION_EVENTS,
 ]
 
 
@@ -185,7 +188,7 @@ class DemoSession:
             players, round_players, pose_ticks, pose_players,
         )
         lineups = cls._normalize_lineups(
-            demo.events.get("weapon_fire"), demo.ticks, rounds, tick_rate, lineup_props,
+            demo.events, demo.ticks, rounds, tick_rate, lineup_props,
         )
         mesh = load_tri_mesh(resolve_tri_path(str(map_name), tri_path))
         return cls(
@@ -302,9 +305,10 @@ class DemoSession:
 
     @staticmethod
     def _normalize_lineups(
-        event_frame: Any, tick_frame: Any, rounds: list[RoundInfo], tick_rate: float,
+        event_frames: dict[str, Any], tick_frame: Any, rounds: list[RoundInfo], tick_rate: float,
         props: dict[str, str | None],
     ) -> list[GrenadeLineup]:
+        event_frame = event_frames.get("weapon_fire")
         if event_frame is None or event_frame.is_empty():
             return []
         histories: dict[str, list[Any]] = {}
@@ -346,7 +350,16 @@ class DemoSession:
                 result.append(derive_grenade_lineup(release, history, config))
             except ValueError:
                 continue
-        return result
+        round_rows = [
+            {
+                "round_num": item.number, "start": item.start_tick,
+                "end": item.end_tick, "official_end": item.end_tick,
+            }
+            for item in rounds
+        ]
+        return attach_grenade_detonations(
+            result, grenade_detonations_from_events(event_frames, round_rows),
+        )
 
     def metadata(self) -> dict[str, Any]:
         rounds = []
