@@ -1,6 +1,6 @@
 # CS2 Demo Analyzer and 3D Viewer
 
-This project provides one local application for loading a CS2 demo, running player-vision or flash-coverage simulations, replaying vision over time, and inspecting the result in 3D. Analysis results stay in memory; a `.glb` is generated only when you explicitly export a snapshot.
+This project provides one local application for loading a CS2 demo, running player-vision or flash-coverage simulations, replaying vision over time, and inspecting the result in 3D. It also includes a grenade-lineup extractor that produces stand/aim references and CS2 console commands. Analysis results stay in memory; a `.glb` is generated only when you explicitly export a snapshot.
 
 It analyzes static Awpy `.tri` map geometry. It is not a literal frame-by-frame reconstruction: smoke occlusion, Valve-exact flash blinding, player models, dynamic props/doors, scope rendering, spectator state, and screen/UI obstruction are outside this analyzer's scope.
 
@@ -99,6 +99,20 @@ The resulting GLB uses gray for no coverage, dark red for weak coverage, and lig
 
 The GLB also includes a separate bright yellow object named `flash_detonation_marker` at the exact pop position, so it can be selected and focused in Blender.
 
+## Grenade lineup extraction
+
+Detect every grenade release in a demo and print a practicable stand/aim point plus movement and throw metadata:
+
+```powershell
+python grenade-lineups.py match.dem --json lineups.json --commands lineups.cfg
+```
+
+Relative exports are written to `out/`. Each JSON record contains the exact release pose, an optional fixed reference pose, a generated movement instruction, a movement path for in-motion fallbacks, separate click/movement/jumpthrow fields, velocity, notes, and ready-to-paste `setpos`/`setang` commands. Use `--grenade-type flashbang` (repeatable) to filter the result.
+
+The extractor discovers current demoparser fields from the demo before parsing. This checkout's current demo exposes `m_nButtonDownMaskPrev`, `m_bIsWalking`, and `m_hGroundEntity`; ordinary velocity is derived from adjacent player positions because no usable direct player-velocity property is present. If a future patch omits the button mask, click type is reported as unknown instead of guessed. Left+right medium-strength throws are reported as `both`.
+
+The commands use the current CS2 forms `setpos X Y Z` and `setang pitch yaw roll` and require `sv_cheats`. Static commands cannot reproduce a run, walk, jump timing, or crouch state, so those remain explicit human-readable instructions. A fixed reference is rejected when no stationary setup exists or the aim drifts beyond the configured tolerance; in that case the commands intentionally use the release point and the JSON includes the approach path.
+
 ## Inspect existing GLB results locally
 
 The repository includes a dependency-free WebGL 2 viewer, so Blender is not required for routine inspection:
@@ -123,4 +137,4 @@ Supported application behavior lives in `cs2_visibility/`. `viewer/` contains th
 
 ## Optional installed commands
 
-`pyproject.toml` also defines `cs2-vision`, `cs2-flash-events`, and `cs2-flash-coverage`. They are generated only after `python -m pip install -e .` and are available only while that Python environment is activated. They intentionally have different names from the `.py` files, just like `pytest` is generated from a Python package rather than a file named `pytest.py`.
+`pyproject.toml` also defines `cs2-vision`, `cs2-flash-events`, `cs2-flash-coverage`, and `cs2-grenade-lineups`. They are generated only after `python -m pip install -e .` and are available only while that Python environment is activated. They intentionally have different names from the `.py` files, just like `pytest` is generated from a Python package rather than a file named `pytest.py`.

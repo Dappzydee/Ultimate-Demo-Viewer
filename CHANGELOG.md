@@ -2,6 +2,15 @@
 
 All notable, explicitly versioned changes to this project are recorded here.
 
+## 0.6.0 - 2026-08-03 - Grenade lineup extraction
+
+- Added patch-aware detection of flashbang, smoke, HE, molotov, incendiary, decoy, tag, and snowball release events from CS2 demos.
+- Added pure lineup derivation for fixed stand/aim references, angle-stability rejection, standing-point collapse, and in-motion path fallbacks.
+- Classified click strength, walking/running/standing movement, jumpthrows, crouch state, release velocity, and left+right medium-strength throws on independent fields.
+- Added human-readable movement directions and distances plus current CS2 `setpos`/`setang` command export in JSON and paste-ready CFG formats.
+- Added the `grenade-lineups.py` checkout command and `cs2-grenade-lineups` installed entry point with grenade filters and configurable detection thresholds.
+- Validated 324 grenade releases across the included current-build demo and added seven synthetic lineup tests; all 18 automated tests pass.
+
 ## 0.5.0 - 2026-08-03 - Fused CUDA analysis
 
 - Moved vision candidate filtering, raycasting, cumulative sample tracking, face reduction, and bit packing into fused NVIDIA Warp kernels.

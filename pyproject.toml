@@ -24,6 +24,7 @@ dev = ["pytest"]
 cs2-vision = "cs2_visibility.cli:main"
 cs2-flash-events = "cs2_visibility.flash_events_cli:main"
 cs2-flash-coverage = "cs2_visibility.flash_coverage_cli:main"
+cs2-grenade-lineups = "cs2_visibility.grenade_lineups_cli:main"
 
 [tool.setuptools.packages.find]
 include = ["cs2_visibility*"]

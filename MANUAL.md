@@ -5,6 +5,8 @@ This software loads a Counter-Strike 2 `.dem` once, runs repeated analyses in me
 - Player vision: static map faces a selected player could see during a selected time window.
 - Flash coverage: static map faces that could be affected by one selected flashbang detonation.
 
+The repository also includes a non-rendering grenade-lineup extractor. It derives stand/aim references, movement paths, throw classification, and console commands from player ticks around every grenade release.
+
 Both tools use Awpy `.tri` map geometry and raycasts. They model static geometry only. They do not currently account for smoke, fire, player models, dynamic props/doors, or UI effects.
 
 ## Integrated application
@@ -94,6 +96,26 @@ The console output assigns each flash a stable `index`. The JSON output is desig
 
 The JSON file contains a list of these objects. Keep the list if you want to select events by index later.
 
+## Grenade lineups
+
+Use `grenade-lineups.py` when you want to reproduce throws rather than simulate flash coverage:
+
+```powershell
+python grenade-lineups.py match.dem --json lineups.json --commands lineups.cfg
+```
+
+The tool reads grenade `weapon_fire` events as release ticks, discovers the current demo's movement properties, and loads five seconds of player ticks before each release. It uses the last stationary stretch before sustained movement as the fixed reference only when pitch and wrapped yaw remain within five degrees of the release aim. If no such stretch exists, or aim drifts too far, `reference_point` is `null`, the approach is exported in `movement_path`, and the static commands use the release point.
+
+Classification is exported on independent axes:
+
+- `click`: `left`, `right`, `both` (CS2's medium-strength left+right throw), or `unknown` when the button mask is unavailable.
+- `movement`: `standing`, `walking`, or `running`, using `m_bIsWalking` when available and a speed threshold otherwise.
+- `jumpthrow`: button- or airborne-rise detection independent of horizontal movement.
+
+Each record includes exact release/reference poses, a generated movement direction and distance, release velocity, confidence notes, and `setpos X Y Z` / `setang pitch yaw 0`. These cheat commands place and aim the player, but cannot recreate velocity, jump timing, or crouch. Run them in a suitable practice server with `sv_cheats 1` and follow the exported comments.
+
+Useful controls include `--grenade-type flashbang` (repeatable), `--tick-rate`, `--lookback-seconds`, `--stationary-speed`, `--ramp-speed`, `--walking-speed`, `--angle-tolerance`, and `--collapse-distance`. Add `--verbose` to print the discovered patch-dependent fields.
+
 ## Flash coverage
 
 Use `flash-coverage.py` to simulate coverage for one explicitly selected flash. It never processes all flashes automatically.
@@ -165,12 +187,13 @@ These commands verify that each CLI loads and exposes its options:
 python vision.py --help
 python flash-events.py --help
 python flash-coverage.py --help
+python grenade-lineups.py --help
 ```
 
 Compile all Python modules before a change:
 
 ```powershell
-python -m compileall -q cs2_visibility vision.py flash-events.py flash-coverage.py
+python -m compileall -q cs2_visibility vision.py flash-events.py flash-coverage.py grenade-lineups.py
 ```
 
 ### Real-demo smoke test
@@ -179,6 +202,7 @@ Use a short, known demo window and a single flash event. Start with a small radi
 
 ```powershell
 python flash-events.py demo_dust2.dem --json flashes.json
+python grenade-lineups.py demo_dust2.dem --grenade-type flashbang --json lineups.json
 python flash-coverage.py --flash-json flashes.json --flash-index 0 `
   --max-distance 300 --samples-per-triangle 1 --out flash_smoke_test.glb --verbose
 ```
@@ -186,9 +210,10 @@ python flash-coverage.py --flash-json flashes.json --flash-index 0 `
 Confirm that:
 
 1. The listed event has a plausible tick, map, player, and XYZ position.
-2. The coverage command selects that same index and reports a raycasting backend.
-3. The GLB file exists and imports into Blender.
-4. The colored region is near the selected flash position.
+2. The lineup JSON contains plausible release/reference points, throw axes, and console commands.
+3. The coverage command selects that same index and reports a raycasting backend.
+4. The GLB file exists and imports into Blender.
+5. The colored region is near the selected flash position.
 
 For a GPU test, omit `--no-gpu` and check that output says `nvidia-warp`. If it says `cpu`, install `warp-lang`, verify CUDA/NVIDIA drivers, and run again.
 
