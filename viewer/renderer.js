@@ -102,6 +102,12 @@ function pitchMatrix(pitchDegrees, pivotHeight = 51) {
   ]);
 }
 
+function poseDirection(yawDegrees, pitchDegrees) {
+  const yaw = Number(yawDegrees) * Math.PI / 180;
+  const pitch = Number(pitchDegrees) * Math.PI / 180;
+  return [Math.cos(pitch) * Math.cos(yaw), Math.cos(pitch) * Math.sin(yaw), -Math.sin(pitch)];
+}
+
 export class ViewerRenderer {
   constructor(canvas, onStatus = () => {}) {
     this.canvas = canvas;
@@ -124,6 +130,7 @@ export class ViewerRenderer {
     this.visionPreviewInstances = [];
     this.visionPathResource = null;
     this.visionSelectionResource = null;
+    this.visionAimResource = null;
     this.visionPathSource = null;
     this.selectedId = null;
     this.shading = 0;
@@ -208,12 +215,16 @@ export class ViewerRenderer {
     this.visionSelectionResource = selectedLines.length ? this.#createLineResource(selectedLines) : null;
     if (value.showModels !== false) {
       this.visionPreviewInstances.push({
-        asset: "playerAim", id: "vision-start", position: value.start.position,
+        asset: Number(value.start.duck || 0) >= 0.5 ? "playerCrouchAim" : "playerAim",
+        id: "vision-start", position: value.start.position,
         yaw: value.start.yaw, pitch: value.start.pitch, tint: [0.55, 1.0, 1.0, 1.0],
+        lookPivot: Number(value.start.duck || 0) >= 0.5 ? 41 : 51,
       });
       if (!value.instant) this.visionPreviewInstances.push({
-        asset: "playerAim", id: "vision-end", position: value.end.position,
+        asset: Number(value.end.duck || 0) >= 0.5 ? "playerCrouchAim" : "playerAim",
+        id: "vision-end", position: value.end.position,
         yaw: value.end.yaw, pitch: value.end.pitch, tint: [1.0, 0.63, 0.28, 1.0],
+        lookPivot: Number(value.end.duck || 0) >= 0.5 ? 41 : 51,
       });
     }
     this.requestRender();
@@ -300,19 +311,24 @@ export class ViewerRenderer {
     this.requestRender();
   }
 
-  setPlayerMarker(position, yawDegrees = 0, visible = true, pitchDegrees = 0) {
+  setPlayerMarker(position, yawDegrees = 0, visible = true, pitchDegrees = 0, duckAmount = 0, maxDistance = 4000) {
     this.replayPlayerInstance = null;
     if (!position || !visible) {
+      this.#setVisionAim(null);
       if (this.playerMarkerResource) this.playerMarkerResource.drawable.visible = false;
       if (this.selectedId === "player-marker") this.selectedId = null;
       this.requestRender();
       return;
     }
-    if (this.overlayAssetResources.has("playerAim")) {
+    this.#setVisionAim({ position, yaw: yawDegrees, pitch: pitchDegrees, duck: duckAmount, maxDistance });
+    const crouching = Number(duckAmount) >= 0.5;
+    const asset = crouching && this.overlayAssetResources.has("playerCrouchAim") ? "playerCrouchAim" : "playerAim";
+    if (this.overlayAssetResources.has(asset)) {
       if (this.playerMarkerResource) this.playerMarkerResource.drawable.visible = false;
       this.replayPlayerInstance = {
-        asset: "playerAim", id: "player-marker", position: position.map(Number),
+        asset, id: "player-marker", position: position.map(Number),
         yaw: Number(yawDegrees), pitch: Number(pitchDegrees), tint: [0.45, 0.92, 1.0, 1.0],
+        lookPivot: crouching ? 41 : 51,
       };
       this.requestRender();
       return;
@@ -416,17 +432,19 @@ export class ViewerRenderer {
     for (let index = 1; index < route.length; index++) {
       lines.push([route[index - 1], route[index], [0.20, 0.88, 0.94, 0.95]]);
     }
-    if (value.aim) {
-      const origin = value.aim.origin.map(Number);
-      const endpoint = value.aim.endpoint.map(Number);
-      lines.push([origin, endpoint, [1.0, 0.82, 0.25, 1.0]]);
+    const aims = value.aims || (value.aim ? [value.aim] : []);
+    for (const aim of aims) {
+      const color = aim.role === "pin-pull" ? [0.72, 0.42, 1.0, 1.0]
+        : aim.role === "release" ? [0.35, 0.82, 1.0, 1.0]
+          : [1.0, 0.82, 0.25, 1.0];
+      lines.push([aim.origin.map(Number), aim.endpoint.map(Number), color]);
     }
     if (lines.length) this.lineupLineResource = this.#createLineResource(lines);
     const points = [
       release, ...(reference ? [reference] : []), ...(pinPull ? [pinPull] : []),
       ...(detonation ? [detonation] : []), ...path,
     ];
-    if (value.aim) points.push(value.aim.origin.map(Number));
+    points.push(...aims.map((aim) => aim.origin.map(Number)));
     this.lineupBounds = {
       min: [0, 1, 2].map((axis) => Math.min(...points.map((point) => point[axis])) - 28),
       max: [0, 1, 2].map((axis) => Math.max(...points.map((point) => point[axis])) + 28),
@@ -599,9 +617,12 @@ export class ViewerRenderer {
 
     if (this.lineResources && (this.showGrid || this.showAxes)) this.#drawReferenceLines(viewProjection);
     if (this.model) this.#drawModel(viewProjection);
-    if (this.visionPathResource) this.#drawLineResource(this.visionPathResource, viewProjection);
-    if (this.visionSelectionResource) this.#drawLineResource(this.visionSelectionResource, viewProjection);
-    if (this.lineupLineResource) this.#drawLineupLines(viewProjection);
+    if (!this.flashCameraPosition) {
+      if (this.visionPathResource) this.#drawLineResource(this.visionPathResource, viewProjection);
+      if (this.visionSelectionResource) this.#drawLineResource(this.visionSelectionResource, viewProjection);
+      if (this.visionAimResource) this.#drawLineResource(this.visionAimResource, viewProjection);
+      if (this.lineupLineResource) this.#drawLineupLines(viewProjection);
+    }
     this.needsRender = false;
 
     this.fpsSamples.push(time);
@@ -617,8 +638,8 @@ export class ViewerRenderer {
     gl.uniform1f(gl.getUniformLocation(this.program, "u_exposure"), this.exposure);
     const drawResources = [...this.resources];
     if (this.markerResource && !this.flashCameraPosition) drawResources.push(this.markerResource);
-    if (this.playerMarkerResource) drawResources.push(this.playerMarkerResource);
-    drawResources.push(...this.lineupMarkerResources);
+    if (this.playerMarkerResource && !this.flashCameraPosition) drawResources.push(this.playerMarkerResource);
+    if (!this.flashCameraPosition) drawResources.push(...this.lineupMarkerResources);
     for (const resource of drawResources) {
       const drawable = resource.drawable;
       if (!drawable.visible) continue;
@@ -641,10 +662,10 @@ export class ViewerRenderer {
         if (resource.indexBuffer) gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, resource.indexBuffer);
       }
     }
-    const overlayInstances = [
+    const overlayInstances = this.flashCameraPosition ? [] : [
       ...this.visionPreviewInstances,
       ...(this.replayPlayerInstance ? [this.replayPlayerInstance] : []),
-      ...(this.analysisAssetInstance && !this.flashCameraPosition ? [this.analysisAssetInstance] : []),
+      ...(this.analysisAssetInstance ? [this.analysisAssetInstance] : []),
       ...this.lineupAssetInstances,
     ];
     for (const instance of overlayInstances) {
@@ -657,7 +678,7 @@ export class ViewerRenderer {
       for (const resource of assetResources) {
         const drawable = resource.drawable;
         const poseTransform = drawable.nodeName?.startsWith("look_")
-          ? multiply(baseTransform, pitchMatrix(instance.pitch || 0)) : baseTransform;
+          ? multiply(baseTransform, pitchMatrix(instance.pitch || 0, instance.lookPivot ?? 51)) : baseTransform;
         const modelMatrix = multiply(poseTransform, drawable.worldMatrix);
         const tint = instance.tint || [1, 1, 1, 1];
         const baseColor = drawable.baseColor.map((value, index) => value * tint[index]);
@@ -749,6 +770,29 @@ export class ViewerRenderer {
     gl.vertexAttribPointer(1, 4, gl.FLOAT, false, 0, 0);
     gl.bindVertexArray(null);
     return { vao, positionBuffer, colorBuffer, vertexCount: positions.length / 3 };
+  }
+
+  #setVisionAim(pose) {
+    if (!pose) {
+      if (this.visionAimResource) this.#disposeLineResource(this.visionAimResource);
+      this.visionAimResource = null;
+      return;
+    }
+    const duck = Math.max(0, Math.min(1, Number(pose.duck || 0)));
+    const origin = pose.position.map(Number);
+    origin[2] += 64 + (46 - 64) * duck;
+    const direction = poseDirection(pose.yaw, pose.pitch);
+    const distance = Math.max(1, Number(pose.maxDistance) || 4000);
+    const endpoint = origin.map((value, axis) => value + direction[axis] * distance);
+    const positions = new Float32Array([...origin, ...endpoint]);
+    if (!this.visionAimResource) {
+      this.visionAimResource = this.#createLineResource([
+        [origin, endpoint, [0.12, 0.88, 1.0, 1.0]],
+      ]);
+      return;
+    }
+    this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.visionAimResource.positionBuffer);
+    this.gl.bufferSubData(this.gl.ARRAY_BUFFER, 0, positions);
   }
 
   #uploadDrawable(drawable) {
@@ -862,12 +906,14 @@ export class ViewerRenderer {
     if (this.lineupLineResource) this.#disposeLineResource(this.lineupLineResource);
     if (this.visionPathResource) this.#disposeLineResource(this.visionPathResource);
     if (this.visionSelectionResource) this.#disposeLineResource(this.visionSelectionResource);
+    if (this.visionAimResource) this.#disposeLineResource(this.visionAimResource);
     this.markerResource = null;
     this.playerMarkerResource = null;
     this.lineupMarkerResources = [];
     this.lineupLineResource = null;
     this.visionPathResource = null;
     this.visionSelectionResource = null;
+    this.visionAimResource = null;
     this.visionPathSource = null;
     this.lineupBounds = null;
     this.analysisAssetInstance = null;

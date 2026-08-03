@@ -26,6 +26,7 @@ const appState = {
   lineupAimRevision: 0,
   playerPreview: null,
   playerPreviewRevision: 0,
+  visionSelectionVisible: false,
   resultHistory: null,
   flashMover: {
     enabled: false,
@@ -116,10 +117,14 @@ for (const button of analysisTypes.map((name) => $(`#${name}-tab`))) {
 }
 $("#round-select").addEventListener("change", configureRound);
 $("#player-select").addEventListener("change", configureVisionPlayer);
-$("#time-mode").addEventListener("change", () => { configureTimeMode(); updateVisionPreview(); });
+$("#time-mode").addEventListener("change", () => {
+  appState.visionSelectionVisible = true;
+  configureTimeMode();
+  updateVisionPreview();
+});
 $("#player-marker-toggle").addEventListener("change", () => {
   updateVisionPreview();
-  if (appState.replay?.type === "vision") applyReplayFrame();
+  if (appState.replay?.type === "vision" && !appState.visionSelectionVisible) applyReplayFrame();
   else renderer.setPlayerMarker(null);
 });
 bindTimeSlider("#start-slider", true);
@@ -330,6 +335,7 @@ async function configureVisionPlayer() {
   const playerId = $("#player-select").value;
   const player = round.players.find((item) => item.id === playerId);
   if (!player) return;
+  appState.visionSelectionVisible = true;
   const maximum = Math.max(0, Number(player.endSeconds));
   for (const selector of ["#start-slider", "#end-slider"]) $(selector).max = maximum.toFixed(3);
   $("#start-slider").value = "0";
@@ -341,6 +347,7 @@ async function configureVisionPlayer() {
   const revision = ++appState.playerPreviewRevision;
   appState.playerPreview = null;
   renderer.setVisionPreview(null);
+  renderer.setPlayerMarker(null);
   try {
     const preview = await apiJson("/api/preview/player", {
       method: "POST",
@@ -371,7 +378,6 @@ function populateFlashes() {
     group.append(heading);
     for (const flash of values) {
       const round = appState.session.rounds.find((item) => item.number === flash.round_number);
-      const seconds = round ? (flash.tick - round.freezeEndTick) / appState.session.tickRate : 0;
       const button = document.createElement("button");
       const selected = flash.index === appState.selectedFlashIndex;
       button.className = `flash-event${selected ? " selected" : ""}`;
@@ -385,7 +391,7 @@ function populateFlashes() {
       player.textContent = flash.thrower || "Unknown player";
       const time = document.createElement("span");
       time.className = "flash-event-time";
-      time.textContent = `R${flash.round_number ?? "?"} · ${formatTime(seconds)}`;
+      time.textContent = `R${flash.round_number ?? "?"} · ${formatTickClock(round, flash.tick)}`;
       const position = document.createElement("span");
       position.className = "flash-event-position";
       position.textContent = positionArray(flash.position).map((value) => Math.round(value)).join(", ");
@@ -414,8 +420,7 @@ function populatePlacedFlashOrigins(flashes) {
     group.label = displayTeam(team);
     for (const flash of values) {
       const round = appState.session.rounds.find((item) => item.number === flash.round_number);
-      const seconds = round ? (flash.tick - round.freezeEndTick) / appState.session.tickRate : 0;
-      group.append(option(flash.index, `R${flash.round_number ?? "?"} · ${formatTime(seconds)} · ${flash.thrower || "Unknown player"}`));
+      group.append(option(flash.index, `R${flash.round_number ?? "?"} · ${formatTickClock(round, flash.tick)} · ${flash.thrower || "Unknown player"}`));
     }
     select.append(group);
   }
@@ -528,8 +533,7 @@ function populateLineups() {
       const time = document.createElement("span");
       time.className = "lineup-row-time";
       const roundInfo = appState.session.rounds.find((item) => item.number === lineup.round);
-      const seconds = roundInfo ? (lineup.T_release - roundInfo.freezeEndTick) / appState.session.tickRate : 0;
-      time.textContent = formatTime(seconds);
+      time.textContent = formatTickClock(roundInfo, lineup.T_release);
       const meta = document.createElement("span");
       meta.className = "lineup-row-meta";
       meta.textContent = `${lineup.throw_type.label} · ${lineup.has_fixed_reference ? "fixed reference" : "in motion"}`;
@@ -590,15 +594,15 @@ function renderLineupDetails(lineup) {
   $("#motion-lineup-legend").hidden = lineup.has_fixed_reference;
   const rows = [
     ["Throw", lineup.throw_type.label],
-    ["Release", `Tick ${lineup.T_release} · ${speed.toFixed(1)} u/s`],
-    ["Reference", lineup.has_fixed_reference ? `Fixed · tick ${lineup.reference_tick}` : "In-motion fallback"],
+    ["Release", `${formatLineupTick(lineup, lineup.T_release)} · ${speed.toFixed(1)} u/s`],
+    ["Reference", lineup.has_fixed_reference ? `Fixed · ${formatLineupTick(lineup, lineup.reference_tick)}` : "In-motion fallback"],
     ...(!lineup.has_fixed_reference ? [[
       "Pin pull", lineup.T_pin_pull === null || lineup.T_pin_pull === undefined
-        ? "Unavailable" : `Tick ${lineup.T_pin_pull}`,
+        ? "Unavailable" : formatLineupTick(lineup, lineup.T_pin_pull),
     ]] : []),
     [
       "Detonation", lineup.T_detonate === null || lineup.T_detonate === undefined
-        ? "Unavailable" : `Tick ${lineup.T_detonate}`,
+        ? "Unavailable" : formatLineupTick(lineup, lineup.T_detonate),
     ],
     ["Notes", (lineup.notes || []).join("; ") || "No warnings"],
   ];
@@ -615,12 +619,15 @@ function lineupPosePosition(pose) {
   return [Number(pose.X), Number(pose.Y), Number(pose.Z)];
 }
 
-function lineupViewPose(lineup) {
-  const pose = lineup.reference_point || lineup.release;
+function lineupPoseView(pose) {
   const duck = Math.max(0, Math.min(1, Number(pose.duck_amount || 0)));
   const position = lineupPosePosition(pose);
   position[2] += 64 + (46 - 64) * duck;
   return { position, yaw: Number(pose.yaw), pitch: Number(pose.pitch) };
+}
+
+function lineupViewPose(lineup) {
+  return lineupPoseView(lineup.reference_point || lineup.release);
 }
 
 function lineupAimDirection(view) {
@@ -631,10 +638,22 @@ function lineupAimDirection(view) {
 
 async function showLineupVisualization(lineup) {
   const revision = ++appState.lineupAimRevision;
-  const view = lineupViewPose(lineup);
-  const direction = lineupAimDirection(view);
   const maxDistance = Math.max(100, Math.min(20000, Number($("#lineup-aim-distance").value) || 4000));
-  const cappedEndpoint = view.position.map((value, axis) => value + direction[axis] * maxDistance);
+  const aimPoses = lineup.has_fixed_reference
+    ? [{ role: "fixed", pose: lineup.reference_point || lineup.release }]
+    : [
+      ...(lineup.pin_pull ? [{ role: "pin-pull", pose: lineup.pin_pull }] : []),
+      { role: "release", pose: lineup.release },
+    ];
+  const aims = aimPoses.map(({ role, pose }) => {
+    const view = lineupPoseView(pose);
+    const direction = lineupAimDirection(view);
+    return {
+      role, origin: view.position,
+      endpoint: view.position.map((value, axis) => value + direction[axis] * maxDistance),
+      direction,
+    };
+  });
   const visualization = {
     fixed: Boolean(lineup.has_fixed_reference),
     grenadeType: lineup.grenade_type,
@@ -647,22 +666,23 @@ async function showLineupVisualization(lineup) {
     releasePitch: Number(lineup.release.pitch),
     detonation: lineup.detonation ? lineupPosePosition(lineup.detonation) : null,
     path: (lineup.movement_path || []).map(lineupPosePosition),
-    aim: { origin: view.position, endpoint: cappedEndpoint },
+    aims,
   };
   renderer.setLineupVisualization(visualization);
   try {
-    const result = await apiJson("/api/pick", {
-      method: "POST", body: JSON.stringify({ origin: view.position, direction }),
-    });
+    const results = await Promise.all(aims.map((aim) => apiJson("/api/pick", {
+      method: "POST", body: JSON.stringify({ origin: aim.origin, direction: aim.direction }),
+    })));
     if (
       revision !== appState.lineupAimRevision
       || appState.analysisType !== "lineup"
       || selectedLineup() !== lineup
     ) return;
-    if (result.position) {
+    for (const [index, result] of results.entries()) {
+      if (!result.position) continue;
       const hit = result.position.map(Number);
-      const distance = Math.hypot(...hit.map((value, axis) => value - view.position[axis]));
-      if (distance <= maxDistance) visualization.aim.endpoint = hit;
+      const distance = Math.hypot(...hit.map((value, axis) => value - aims[index].origin[axis]));
+      if (distance <= maxDistance) aims[index].endpoint = hit;
     }
     renderer.setLineupVisualization(visualization);
   } catch (error) {
@@ -764,7 +784,7 @@ function setAnalysisType(type) {
     renderer.setMarker(null);
     renderer.setLineupVisualization(null);
     updateVisionPreview();
-    if (appState.replay?.type === "vision") applyReplayFrame();
+    if (appState.replay?.type === "vision" && !appState.visionSelectionVisible) applyReplayFrame();
   }
 }
 
@@ -780,6 +800,7 @@ function configureTimeMode() {
 function bindTimeSlider(sliderSelector, isStart) {
   const slider = $(sliderSelector);
   slider.addEventListener("input", () => {
+    appState.visionSelectionVisible = true;
     let start = Number($("#start-slider").value);
     let end = Number($("#end-slider").value);
     if (isStart && start > end) {
@@ -813,7 +834,7 @@ function previewPoseAt(seconds) {
 }
 
 function updateVisionPreview() {
-  if (appState.analysisType !== "vision" || !appState.playerPreview) {
+  if (appState.analysisType !== "vision" || !appState.playerPreview || !appState.visionSelectionVisible) {
     renderer.setVisionPreview(null);
     return;
   }
@@ -823,6 +844,7 @@ function updateVisionPreview() {
   const start = previewPoseAt(startSeconds);
   const end = previewPoseAt(endSeconds);
   if (!start || !end) { renderer.setVisionPreview(null); return; }
+  renderer.setPlayerMarker(null);
   renderer.setVisionPreview({
     path: appState.playerPreview.poses, start, end, instant,
     showModels: $("#player-marker-toggle").checked,
@@ -1202,6 +1224,8 @@ async function loadResult(resultId) {
 
 function installVisionReplay(buffer, metadata) {
   const header = parseHeader(buffer, "CSV1");
+  appState.visionSelectionVisible = false;
+  renderer.setVisionPreview(null);
   const ticksOffset = 24;
   const ticksBytes = header.frameCount * 4;
   const posesOffset = ticksOffset + ticksBytes;
@@ -1246,10 +1270,12 @@ function parseHeader(buffer, expectedMagic) {
   const magic = String.fromCharCode(...bytes);
   const view = new DataView(buffer);
   const version = view.getUint32(4, true);
-  const validVersion = expectedMagic === "CSV1" ? version === 1 || version === 2 : version === 1;
+  const validVersion = expectedMagic === "CSV1" ? [1, 2, 3].includes(version) : version === 1;
   if (magic !== expectedMagic || !validVersion) throw new Error("Unsupported analysis result format.");
   const poseWidth = version >= 2 ? view.getUint32(20, true) : 0;
-  if (expectedMagic === "CSV1" && version >= 2 && poseWidth !== 5) throw new Error("Unsupported vision pose data.");
+  if (expectedMagic === "CSV1" && version >= 2 && poseWidth !== (version === 2 ? 5 : 6)) {
+    throw new Error("Unsupported vision pose data.");
+  }
   return {
     version, faceCount: view.getUint32(8, true), frameCount: view.getUint32(12, true),
     width: view.getUint32(16, true), poseWidth,
@@ -1273,6 +1299,8 @@ function applyReplayFrame() {
     renderer.setPlayerMarker(
       [replay.poses[poseOffset], replay.poses[poseOffset + 1], replay.poses[poseOffset + 2]],
       replay.poses[poseOffset + 3], true, replay.poses[poseOffset + 4],
+      replay.poseWidth >= 6 ? replay.poses[poseOffset + 5] : 0,
+      Number(replay.metadata.config?.max_distance || $("#vision-distance").value || 4000),
     );
   } else {
     renderer.setPlayerMarker(null);
@@ -1280,7 +1308,7 @@ function applyReplayFrame() {
   $("#frame-slider").value = String(appState.frame);
   const round = appState.session.rounds.find((item) => item.number === replay.metadata.roundNumber);
   const seconds = round ? (replay.ticks[appState.frame] - round.freezeEndTick) / appState.session.tickRate : 0;
-  $("#replay-time").textContent = formatTime(seconds);
+  $("#replay-time").textContent = round ? formatRoundClock(round.clockSeconds, seconds) : "--:--";
   $("#status-summary").textContent = `Frame ${appState.frame + 1}/${replay.frameCount} · tick ${replay.ticks[appState.frame]} · ${replay.metadata.backend}`;
 }
 
@@ -1412,9 +1440,10 @@ function historyResultTitle(result) {
 
 function historyResultMeta(result) {
   if (result.analysisType === "vision") {
+    const round = appState.session?.rounds.find((item) => item.number === result.roundNumber);
     const range = result.timeMode === "instant"
-      ? formatTime(result.startSeconds)
-      : `${formatTime(result.startSeconds)}–${formatTime(result.endSeconds)}`;
+      ? formatElapsedClock(round, result.startSeconds)
+      : `${formatElapsedClock(round, result.startSeconds)}–${formatElapsedClock(round, result.endSeconds)}`;
     return `R${result.roundNumber} · ${range} · ${formatNumber(result.frameCount)} frame${result.frameCount === 1 ? "" : "s"}`;
   }
   return result.flash?.round_number ? `R${result.flash.round_number} · ${result.source}` : result.source;
@@ -1636,6 +1665,7 @@ function clickToggle(selector) { $(selector).click(); }
 async function loadOverlayAssets() {
   const definitions = {
     playerAim: "/assets/player-aim.glb",
+    playerCrouchAim: "/assets/player-crouch-aim.glb",
     playerHold: "/assets/player-hold.glb",
     playerThrow: "/assets/player-throw.glb",
     flashbang: "/assets/flashbang.glb",
@@ -1647,7 +1677,7 @@ async function loadOverlayAssets() {
   }));
   renderer.setOverlayAssets(Object.fromEntries(entries));
   updateVisionPreview();
-  if (appState.replay?.type === "vision") applyReplayFrame();
+  if (appState.replay?.type === "vision" && !appState.visionSelectionVisible) applyReplayFrame();
   if (appState.analysisType === "flash") configureFlashSource();
   if (appState.analysisType === "lineup" && selectedLineup()) {
     showLineupVisualization(selectedLineup());
@@ -1699,13 +1729,21 @@ function downloadBlob(filename, content, contentType) {
 const formatNumber = (value) => new Intl.NumberFormat().format(value);
 const compactNumber = (value) => new Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 1 }).format(value);
 const formatRoundClock = (clockSeconds, elapsedSeconds) => {
-  const remaining = Math.max(0, Math.ceil(Number(clockSeconds) - Number(elapsedSeconds) - 1e-6));
+  const elapsed = Math.max(0, Number(elapsedSeconds));
+  const remaining = Math.max(0, Math.ceil(Number(clockSeconds) - elapsed - 1e-6));
   return `${Math.floor(remaining / 60)}:${String(remaining % 60).padStart(2, "0")}`;
 };
-const formatTime = (seconds) => {
-  const sign = seconds < 0 ? "−" : "";
-  const absolute = Math.abs(seconds);
-  return `${sign}${Math.floor(absolute / 60)}:${(absolute % 60).toFixed(1).padStart(4, "0")}`;
+const formatElapsedClock = (round, elapsedSeconds) => (
+  round ? formatRoundClock(round.clockSeconds, elapsedSeconds) : "--:--"
+);
+const formatTickClock = (round, tick) => (
+  round && Number.isFinite(Number(tick))
+    ? formatElapsedClock(round, (Number(tick) - round.freezeEndTick) / appState.session.tickRate)
+    : "--:--"
+);
+const formatLineupTick = (lineup, tick) => {
+  const round = appState.session?.rounds.find((item) => item.number === lineup.round);
+  return formatTickClock(round, tick);
 };
 const formatBytes = (bytes) => {
   if (!bytes) return "0 B";

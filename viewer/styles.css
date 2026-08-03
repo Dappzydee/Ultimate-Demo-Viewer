@@ -111,6 +111,9 @@ summary { color: var(--muted); cursor: pointer; font-size: 11px; }
 .motion-release-dot { margin-left: 5px; background: #2aaeff; }
 .detonation-dot { margin-left: 5px; background: #ff404d; }
 .aim-line { width: 13px; height: 2px; margin-left: 5px; background: #ffd140; }
+.pin-pull-aim-line, .release-aim-line { width: 13px; height: 2px; margin-left: 5px; }
+.pin-pull-aim-line { background: #a95cff; }
+.release-aim-line { background: #2aaeff; }
 .lineup-command-box { display: grid; gap: 3px; padding: 7px; border: 1px solid var(--line); border-radius: 4px; background: #0e1216; color: #b9e6c9; overflow-x: auto; }
 .lineup-command-box code { white-space: nowrap; font-size: 10px; }
 .lineup-actions { display: grid; grid-template-columns: .7fr 1fr 1.4fr; gap: 5px; }

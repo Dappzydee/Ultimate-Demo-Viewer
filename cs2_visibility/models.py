@@ -46,6 +46,7 @@ class PlayerPose:
     yaw_degrees: float
     pitch_degrees: float
     origin_position: np.ndarray | None = None
+    duck_amount: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -77,6 +78,7 @@ class VisibilityTimelineResult:
     positions: np.ndarray | None = None
     yaws: np.ndarray | None = None
     pitches: np.ndarray | None = None
+    ducks: np.ndarray | None = None
 
     @property
     def seen_mask(self) -> np.ndarray:

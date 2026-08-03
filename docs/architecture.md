@@ -37,7 +37,7 @@ When CUDA is available, `WarpRaycaster` also owns a fused analysis path. Canonic
 
 ## Time and replay contracts
 
-An instant vision analysis selects the nearest valid pose to the requested round-relative time. An interval samples ordered poses between its endpoints. Timeline output contains two packed face bitsets per frame: visibility at that frame and visibility accumulated from the interval start. This keeps playback compact and allows switching modes without rerunning raycasts.
+An instant vision analysis selects the nearest valid pose to the requested round-relative time. An interval samples ordered poses between its endpoints. Timeline output contains two packed face bitsets per frame: visibility at that frame and visibility accumulated from the interval start. Replay payload version 3 also carries floor position, yaw, pitch, and duck amount per frame so the viewer can select the correct pose asset and exact-look ray without retaining the demo parser. The decoder still accepts older version-1 and version-2 result payloads. This keeps playback compact and allows switching modes without rerunning raycasts.
 
 ## Session archives
 

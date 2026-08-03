@@ -76,6 +76,24 @@ def aiming_player() -> trimesh.Scene:
     return scene
 
 
+def crouching_aiming_player() -> trimesh.Scene:
+    scene = trimesh.Scene()
+    add(scene, "body_left_boot", box((9, 7, 5), (2, -5, 2.5), BOOT))
+    add(scene, "body_right_boot", box((9, 7, 5), (2, 5, 2.5), BOOT))
+    add(scene, "body_left_shin", cylinder_between((0, -5, 5), (-6, -5, 17), 3.8, PANTS))
+    add(scene, "body_right_shin", cylinder_between((0, 5, 5), (-6, 5, 17), 3.8, PANTS))
+    add(scene, "body_left_thigh", cylinder_between((-6, -5, 17), (2, -5, 25), 4.2, PANTS))
+    add(scene, "body_right_thigh", cylinder_between((-6, 5, 17), (2, 5, 25), 4.2, PANTS))
+    add(scene, "body_torso", box((17, 15, 21), (2, 0, 33.5), SHIRT))
+    add(scene, "look_head", sphere(7, (2, 0, 49), SKIN))
+    add(scene, "look_face", box((4, 8, 3), (8.2, 0, 48.5), (196, 136, 98, 255)))
+    add(scene, "look_left_arm", cylinder_between((5, -8, 41), (19, -4, 40), 3, SKIN))
+    add(scene, "look_right_arm", cylinder_between((5, 8, 41), (19, 4, 40), 3, SKIN))
+    add(scene, "look_weapon", box((31, 4, 4), (27, 0, 41), WEAPON))
+    add(scene, "look_weapon_sight", box((5, 2, 3), (27, 0, 44.3), METAL))
+    return scene
+
+
 def holding_player() -> trimesh.Scene:
     scene = base_player()
     add(scene, "look_left_arm", cylinder_between((2, -8, 50), (12, -3, 46), 3, SKIN))
@@ -116,6 +134,7 @@ def main() -> None:
     OUTPUT.mkdir(parents=True, exist_ok=True)
     assets = {
         "player-aim.glb": aiming_player(),
+        "player-crouch-aim.glb": crouching_aiming_player(),
         "player-hold.glb": holding_player(),
         "player-throw.glb": throwing_player(),
         "flashbang.glb": flashbang(),

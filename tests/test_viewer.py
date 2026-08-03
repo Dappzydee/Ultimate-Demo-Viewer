@@ -98,6 +98,8 @@ class ViewerServerTests(unittest.TestCase):
             self.assertIn(b"setLineupCameraFov(degrees)", renderer)
             self.assertIn(b"setOverlayAssets(models)", renderer)
             self.assertIn(b"setVisionPreview(value)", renderer)
+            self.assertIn(b"#setVisionAim(pose)", renderer)
+            self.assertIn(b'"playerCrouchAim"', renderer)
             self.assertIn(b'"lineup-pin-pull"', renderer)
             self.assertIn(b'"lineup-detonation"', renderer)
             self.assertIn(b"frameLineup()", renderer)
@@ -112,13 +114,15 @@ class ViewerServerTests(unittest.TestCase):
             self.assertIn(b"exportFilteredLineups(format)", application_script)
             self.assertIn(b'apiJson("/api/preview/player"', application_script)
             self.assertIn(b"loadOverlayAssets()", application_script)
+            self.assertIn(b"formatTickClock(round, flash.tick)", application_script)
+            self.assertIn(b"const aims = aimPoses.map", application_script)
             self.assertNotIn(b"sessionResultIds", application_script)
             self.assertNotIn(b"history-save", application_script)
             self.assertNotIn(b"finalizeFlashMovement", application_script)
         with urlopen(f"{self.base_url}/model.glb") as response:
             self.assertEqual(response.headers["Content-Type"], "model/gltf-binary")
             self.assertEqual(response.read(), b"glTF-test-payload")
-        for asset in ("player-aim.glb", "player-hold.glb", "player-throw.glb", "flashbang.glb"):
+        for asset in ("player-aim.glb", "player-crouch-aim.glb", "player-hold.glb", "player-throw.glb", "flashbang.glb"):
             with urlopen(f"{self.base_url}/assets/{asset}") as response:
                 self.assertEqual(response.read(4), b"glTF")
 

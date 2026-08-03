@@ -88,7 +88,7 @@ class VisibilityTimelineTests(unittest.TestCase):
         result = analyzer.analyze_timeline(
             [
                 PlayerPose(100, np.zeros(3), 0, 0),
-                PlayerPose(104, np.zeros(3), 90, 0),
+                PlayerPose(104, np.zeros(3), 90, 0, duck_amount=1),
             ],
             show_progress=False,
         )
@@ -101,6 +101,7 @@ class VisibilityTimelineTests(unittest.TestCase):
         np.testing.assert_array_equal(decoded.final_mask, [True, True])
         np.testing.assert_array_equal(decoded.positions, np.zeros((2, 3)))
         np.testing.assert_array_equal(decoded.yaws, [0, 90])
+        np.testing.assert_array_equal(decoded.ducks, [0, 1])
         legacy = decode_visibility_timeline(encode_visibility_timeline(
             replace(result, positions=None, yaws=None, pitches=None),
         ))
@@ -184,6 +185,7 @@ class SessionArchiveTests(unittest.TestCase):
         preview = restored.player_preview("steam:7", 1)
         self.assertEqual(preview["endSeconds"], 1)
         self.assertEqual(preview["poses"][-1]["yaw"], 90)
+        self.assertEqual(preview["poses"][-1]["duck"], 1)
         poses = restored.select_poses(
             "steam:7", 1, 1, 1, instant=True, tick_step=4, eye_height=64, crouch_eye_height=46,
         )
@@ -235,6 +237,7 @@ class SessionArchiveTests(unittest.TestCase):
             self.assertEqual(decoded.face_count, 2)
             np.testing.assert_allclose(decoded.positions, [[1, 2, 3]])
             np.testing.assert_allclose(decoded.yaws, [90])
+            np.testing.assert_allclose(decoded.ducks, [1])
             self.assertEqual(result.metadata["playerName"], "Player")
             self.assertEqual(state.export_result_glb(job.result_id, "cumulative", None)[:4], b"glTF")
             cached_job = state.start_vision(vision_request)

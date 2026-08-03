@@ -233,6 +233,7 @@ class VisibilityAnalyzer:
                 ], dtype=np.float32),
                 yaws=np.asarray([pose.yaw_degrees for pose in pose_list], dtype=np.float32),
                 pitches=np.asarray([pose.pitch_degrees for pose in pose_list], dtype=np.float32),
+                ducks=np.asarray([pose.duck_amount for pose in pose_list], dtype=np.float32),
             )
 
         instant_masks = np.zeros((len(pose_list), packed_width), dtype=np.uint8)
@@ -327,6 +328,7 @@ class VisibilityAnalyzer:
             ], dtype=np.float32),
             yaws=np.asarray([pose.yaw_degrees for pose in pose_list], dtype=np.float32),
             pitches=np.asarray([pose.pitch_degrees for pose in pose_list], dtype=np.float32),
+            ducks=np.asarray([pose.duck_amount for pose in pose_list], dtype=np.float32),
         )
 
 

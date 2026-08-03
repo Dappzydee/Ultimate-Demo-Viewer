@@ -2,6 +2,16 @@
 
 All notable, explicitly versioned changes to this project are recorded here.
 
+## 0.9.0 - 2026-08-03 - Crouch poses and consistent round clocks
+
+- Applied the reverse-counting configured round clock to recorded Flash events, Lineup lists and event details, Vision replay, and Vision history ranges.
+- Added a generated crouching aiming asset and carried `duck_amount` through Vision previews and replay payloads so standing and crouching models switch at the recorded pose.
+- Removed the two Vision selection endpoint models when an analysis result opens; they return only after the user changes the player, mode, or time selection.
+- Added a cyan exact-look ray to the current Vision replay pose, using the configured Vision maximum distance.
+- Hid all overlay models, markers, and analysis lines while inside Flash camera mode so they cannot obstruct the camera.
+- Added separate collision-limited pin-pull and release look rays for in-motion grenade lineups while leaving the fixed-reference visualization unchanged.
+- Upgraded Vision replay payloads to include crouch state while retaining decoding support for existing pose-less and standing-only result payloads; all 19 automated tests pass.
+
 ## 0.8.0 - 2026-08-03 - Player paths and pose assets
 
 - Added immediate alive-period movement-path previews when selecting a Vision round and player.

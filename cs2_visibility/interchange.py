@@ -12,9 +12,10 @@ from .models import VisibilityTimelineResult
 
 VISION_MAGIC = b"CSV1"
 FLASH_MAGIC = b"CSF1"
-VISION_FORMAT_VERSION = 2
+VISION_FORMAT_VERSION = 3
 FLASH_FORMAT_VERSION = 1
-VISION_POSE_WIDTH = 5
+VISION_POSE_WIDTH = 6
+VISION_POSE_WIDTHS = {2: 5, 3: 6}
 _HEADER = struct.Struct("<4sIIIII")
 
 
@@ -27,6 +28,7 @@ class DecodedVisionTimeline:
     positions: np.ndarray | None = None
     yaws: np.ndarray | None = None
     pitches: np.ndarray | None = None
+    ducks: np.ndarray | None = None
 
     @property
     def final_mask(self) -> np.ndarray:
@@ -54,11 +56,14 @@ def encode_visibility_timeline(result: VisibilityTimelineResult) -> bytes:
         positions = np.asarray(result.positions, dtype=np.float32)
         yaws = np.asarray(result.yaws, dtype=np.float32)
         pitches = np.asarray(result.pitches, dtype=np.float32)
+        ducks = np.zeros(frame_count, dtype=np.float32) if result.ducks is None else np.asarray(result.ducks, dtype=np.float32)
         if positions.shape != (frame_count, 3) or yaws.shape != (frame_count,) or pitches.shape != (frame_count,):
             raise ValueError("Vision pose arrays do not match the timeline frame count.")
+        if ducks.shape != (frame_count,):
+            raise ValueError("Vision duck amounts do not match the timeline frame count.")
         version = VISION_FORMAT_VERSION
         pose_width = VISION_POSE_WIDTH
-        pose_records = np.column_stack((positions, yaws, pitches)).astype("<f4").tobytes(order="C")
+        pose_records = np.column_stack((positions, yaws, pitches, ducks)).astype("<f4").tobytes(order="C")
     header = _HEADER.pack(VISION_MAGIC, version, result.face_count, frame_count, packed_width, pose_width)
     return b"".join(
         (
@@ -76,14 +81,14 @@ def decode_visibility_timeline(payload: bytes) -> DecodedVisionTimeline:
     if len(payload) < _HEADER.size:
         raise ValueError("Visibility timeline is truncated.")
     magic, version, face_count, frame_count, packed_width, pose_width = _HEADER.unpack_from(payload)
-    if magic != VISION_MAGIC or version not in (1, VISION_FORMAT_VERSION):
+    if magic != VISION_MAGIC or version not in (1, *VISION_POSE_WIDTHS):
         raise ValueError("Unsupported visibility timeline format.")
     if packed_width != (face_count + 7) // 8:
         raise ValueError("Visibility timeline has an invalid packed-mask width.")
     ticks_size = frame_count * 4
     if version == 1 and pose_width != 0:
         raise ValueError("Legacy visibility timelines cannot contain pose records.")
-    if version == VISION_FORMAT_VERSION and pose_width != VISION_POSE_WIDTH:
+    if version in VISION_POSE_WIDTHS and pose_width != VISION_POSE_WIDTHS[version]:
         raise ValueError("Visibility timeline has an invalid pose-record width.")
     poses_size = frame_count * pose_width * 4
     masks_size = frame_count * packed_width
@@ -93,17 +98,18 @@ def decode_visibility_timeline(payload: bytes) -> DecodedVisionTimeline:
     offset = _HEADER.size
     ticks = np.frombuffer(payload, dtype="<u4", count=frame_count, offset=offset).copy()
     offset += ticks_size
-    positions = yaws = pitches = None
+    positions = yaws = pitches = ducks = None
     if pose_width:
         poses = np.frombuffer(
             payload, dtype="<f4", count=frame_count * pose_width, offset=offset,
         ).reshape(frame_count, pose_width).copy()
         positions, yaws, pitches = poses[:, :3], poses[:, 3], poses[:, 4]
+        ducks = poses[:, 5] if pose_width >= 6 else np.zeros(frame_count, dtype=np.float32)
         offset += poses_size
     instant = np.frombuffer(payload, dtype=np.uint8, count=masks_size, offset=offset).reshape(frame_count, packed_width).copy()
     offset += masks_size
     cumulative = np.frombuffer(payload, dtype=np.uint8, count=masks_size, offset=offset).reshape(frame_count, packed_width).copy()
-    return DecodedVisionTimeline(face_count, ticks, instant, cumulative, positions, yaws, pitches)
+    return DecodedVisionTimeline(face_count, ticks, instant, cumulative, positions, yaws, pitches, ducks)
 
 
 def encode_flash_intensities(intensities: np.ndarray) -> bytes:

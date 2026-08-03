@@ -476,6 +476,7 @@ class DemoSession:
                 "position": self.pose_positions[index].astype(float).tolist(),
                 "yaw": float(self.pose_yaws[index]),
                 "pitch": float(self.pose_pitches[index]),
+                "duck": float(np.clip(self.pose_ducks[index], 0.0, 1.0)),
             }
             for index in selected_ids
         ]
@@ -540,7 +541,7 @@ class DemoSession:
             PlayerPose(
                 int(self.pose_ticks[row_id]), positions[index],
                 float(self.pose_yaws[row_id]), float(self.pose_pitches[row_id]),
-                origins[index],
+                origins[index], float(ducks[index]),
             )
             for index, row_id in enumerate(selected_ids)
         ]
