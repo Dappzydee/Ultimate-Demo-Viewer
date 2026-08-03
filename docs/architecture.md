@@ -25,6 +25,7 @@ This repository is a local CS2 demo-analysis application plus reusable command-l
 ```text
 .dem -> Awpy parser -> DemoSession -> normalized poses/events
                          |        -> cached MapAnalysisContext -> Warp or CPU
+                         |        -> derived grenade lineups -> viewer markers/paths/commands
                          |        -> packed masks/intensities -> WebGL buffers
                          |        -> optional GLB snapshot
                          `--------> optional self-contained .cs2session
@@ -41,6 +42,8 @@ An instant vision analysis selects the nearest valid pose to the requested round
 ## Session archives
 
 `.cs2session` is a versioned ZIP container with JSON metadata plus compressed NumPy arrays for normalized poses and map geometry. It may also contain the current packed analysis result. It deliberately does not embed the original demo. A reopened session can rerun analyses that need the captured fields, but a future visualization requiring new demo properties still needs the source `.dem`.
+
+New archives store already-derived lineup records in manifest metadata, so the Lineups tab works without the original demo or raw movement buttons. Older archives remain schema-compatible and explicitly report that lineup data is unavailable.
 
 Keep Awpy dataframe column naming inside the parsing modules. All other modules must work with typed records and NumPy arrays, so Awpy schema changes have one contained adaptation point.
 

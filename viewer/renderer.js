@@ -91,6 +91,9 @@ export class ViewerRenderer {
     this.resources = [];
     this.markerResource = null;
     this.playerMarkerResource = null;
+    this.lineupMarkerResources = [];
+    this.lineupLineResource = null;
+    this.lineupBounds = null;
     this.selectedId = null;
     this.shading = 0;
     this.exposure = 1;
@@ -100,6 +103,7 @@ export class ViewerRenderer {
     this.projection = "perspective";
     this.camera = { target: [0, 0, 0], yaw: Math.PI * 0.22, pitch: Math.PI * 0.24, distance: 10, orthoSize: 5 };
     this.flashCameraPosition = null;
+    this.lineupCameraPosition = null;
     this.interactionLocked = false;
     this.sceneRadius = 10;
     this.lineResources = null;
@@ -241,6 +245,63 @@ export class ViewerRenderer {
     this.requestRender();
   }
 
+  setLineupVisualization(value) {
+    for (const resource of this.lineupMarkerResources) this.#disposeResource(resource);
+    this.lineupMarkerResources = [];
+    if (this.lineupLineResource) this.#disposeLineResource(this.lineupLineResource);
+    this.lineupLineResource = null;
+    this.lineupBounds = null;
+    if (!value) { this.requestRender(); return; }
+
+    const reference = value.reference?.map(Number) || null;
+    const release = value.release.map(Number);
+    if (reference) this.lineupMarkerResources.push(this.#createMarkerResource(
+      "lineup-reference", "Lineup reference", reference, 22, [42, 174, 255, 255],
+    ));
+    this.lineupMarkerResources.push(this.#createMarkerResource(
+      "lineup-release", "Grenade release", release, 18, [255, 137, 48, 255],
+    ));
+
+    const lines = [];
+    const path = (value.path || []).map((point) => point.map(Number));
+    const route = path.length > 1 ? path : reference ? [reference, release] : [];
+    for (let index = 1; index < route.length; index++) {
+      lines.push([route[index - 1], route[index], [0.20, 0.88, 0.94, 0.95]]);
+    }
+    if (value.aim) {
+      const origin = value.aim.origin.map(Number);
+      const yaw = Number(value.aim.yaw) * Math.PI / 180;
+      const pitch = Number(value.aim.pitch) * Math.PI / 180;
+      const direction = [Math.cos(pitch) * Math.cos(yaw), Math.cos(pitch) * Math.sin(yaw), -Math.sin(pitch)];
+      lines.push([origin, v3.add(origin, v3.scale(direction, 320)), [1.0, 0.82, 0.25, 1.0]]);
+    }
+    if (lines.length) this.lineupLineResource = this.#createLineResource(lines);
+    const points = [release, ...(reference ? [reference] : []), ...path];
+    if (value.aim) points.push(value.aim.origin.map(Number));
+    this.lineupBounds = {
+      min: [0, 1, 2].map((axis) => Math.min(...points.map((point) => point[axis])) - 28),
+      max: [0, 1, 2].map((axis) => Math.max(...points.map((point) => point[axis])) + 28),
+    };
+    this.requestRender();
+  }
+
+  frameLineup() {
+    if (this.lineupBounds) this.frameBounds(this.lineupBounds);
+  }
+
+  setLineupCamera(pose) {
+    if (pose) {
+      this.lineupCameraPosition = pose.position.map(Number);
+      this.camera.yaw = Number(pose.yaw) * Math.PI / 180 + Math.PI;
+      this.camera.pitch = Number(pose.pitch) * Math.PI / 180;
+    } else if (this.lineupCameraPosition) {
+      const previousPosition = this.lineupCameraPosition;
+      this.lineupCameraPosition = null;
+      this.focusPoint(previousPosition);
+    }
+    this.requestRender();
+  }
+
   focusPoint(position, radius = 24) {
     if (!position) return;
     this.camera.target = position.map(Number);
@@ -375,6 +436,7 @@ export class ViewerRenderer {
 
     if (this.lineResources && (this.showGrid || this.showAxes)) this.#drawReferenceLines(viewProjection);
     if (this.model) this.#drawModel(viewProjection);
+    if (this.lineupLineResource) this.#drawLineupLines(viewProjection);
     this.needsRender = false;
 
     this.fpsSamples.push(time);
@@ -391,6 +453,7 @@ export class ViewerRenderer {
     const drawResources = [...this.resources];
     if (this.markerResource && !this.flashCameraPosition) drawResources.push(this.markerResource);
     if (this.playerMarkerResource) drawResources.push(this.playerMarkerResource);
+    drawResources.push(...this.lineupMarkerResources);
     for (const resource of drawResources) {
       const drawable = resource.drawable;
       if (!drawable.visible) continue;
@@ -424,6 +487,67 @@ export class ViewerRenderer {
     if (this.showGrid) gl.drawArrays(gl.LINES, 0, this.lineResources.gridVertices);
     if (this.showAxes) gl.drawArrays(gl.LINES, this.lineResources.gridVertices, 6);
     gl.bindVertexArray(null);
+  }
+
+  #drawLineupLines(viewProjection) {
+    const gl = this.gl;
+    gl.useProgram(this.lineProgram);
+    uniformMatrix(gl, this.lineProgram, "u_viewProjection", viewProjection);
+    gl.bindVertexArray(this.lineupLineResource.vao);
+    gl.drawArrays(gl.LINES, 0, this.lineupLineResource.vertexCount);
+    gl.bindVertexArray(null);
+  }
+
+  #createMarkerResource(id, name, position, radius, color) {
+    const [x, y, z] = position;
+    const points = {
+      top: [x, y, z + radius], bottom: [x, y, z - radius],
+      east: [x + radius, y, z], west: [x - radius, y, z],
+      north: [x, y + radius, z], south: [x, y - radius, z],
+    };
+    const triangles = [
+      [points.top, points.east, points.north], [points.top, points.north, points.west],
+      [points.top, points.west, points.south], [points.top, points.south, points.east],
+      [points.bottom, points.north, points.east], [points.bottom, points.west, points.north],
+      [points.bottom, points.south, points.west], [points.bottom, points.east, points.south],
+    ];
+    const positions = new Float32Array(triangles.flat(2));
+    const colors = new Uint8Array((positions.length / 3) * 4);
+    for (let index = 0; index < colors.length; index += 4) colors.set(color, index);
+    return this.#uploadDrawable({
+      id, name,
+      position: { array: positions, count: positions.length / 3, components: 3, componentType: 5126, normalized: false },
+      color: { array: colors, count: positions.length / 3, components: 4, componentType: 5121, normalized: true },
+      indices: null,
+      worldMatrix: new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]),
+      bounds: { min: [x - radius, y - radius, z - radius], max: [x + radius, y + radius, z + radius] },
+      triangleCount: 8, vertexCount: positions.length / 3,
+      baseColor: [1, 1, 1, 1], doubleSided: true, visible: true,
+    });
+  }
+
+  #createLineResource(lines) {
+    const gl = this.gl;
+    const positions = [];
+    const colors = [];
+    for (const [start, end, color] of lines) {
+      positions.push(...start, ...end);
+      colors.push(...color, ...color);
+    }
+    const vao = gl.createVertexArray();
+    gl.bindVertexArray(vao);
+    const positionBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(positions), gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+    const colorBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, colorBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(colors), gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(1);
+    gl.vertexAttribPointer(1, 4, gl.FLOAT, false, 0, 0);
+    gl.bindVertexArray(null);
+    return { vao, positionBuffer, colorBuffer, vertexCount: positions.length / 3 };
   }
 
   #uploadDrawable(drawable) {
@@ -533,8 +657,13 @@ export class ViewerRenderer {
     for (const resource of this.resources) this.#disposeResource(resource);
     if (this.markerResource) this.#disposeResource(this.markerResource);
     if (this.playerMarkerResource) this.#disposeResource(this.playerMarkerResource);
+    for (const resource of this.lineupMarkerResources) this.#disposeResource(resource);
+    if (this.lineupLineResource) this.#disposeLineResource(this.lineupLineResource);
     this.markerResource = null;
     this.playerMarkerResource = null;
+    this.lineupMarkerResources = [];
+    this.lineupLineResource = null;
+    this.lineupBounds = null;
     if (this.lineResources) {
       gl.deleteVertexArray(this.lineResources.vao);
       gl.deleteBuffer(this.lineResources.positionBuffer);
@@ -553,7 +682,15 @@ export class ViewerRenderer {
     gl.deleteBuffer(resource.wireIndexBuffer);
   }
 
+  #disposeLineResource(resource) {
+    const gl = this.gl;
+    gl.deleteVertexArray(resource.vao);
+    gl.deleteBuffer(resource.positionBuffer);
+    gl.deleteBuffer(resource.colorBuffer);
+  }
+
   #eyePosition() {
+    if (this.lineupCameraPosition) return [...this.lineupCameraPosition];
     if (this.flashCameraPosition) return [...this.flashCameraPosition];
     const cp = Math.cos(this.camera.pitch);
     return v3.add(this.camera.target, [
@@ -569,12 +706,13 @@ export class ViewerRenderer {
   }
 
   #viewTarget() {
-    if (!this.flashCameraPosition) return this.camera.target;
-    return v3.add(this.flashCameraPosition, this.#forwardDirection());
+    const fixedPosition = this.lineupCameraPosition || this.flashCameraPosition;
+    if (!fixedPosition) return this.camera.target;
+    return v3.add(fixedPosition, this.#forwardDirection());
   }
 
   #updateMovement(delta) {
-    if (this.flashCameraPosition || !this.keys.size || !this.model) return false;
+    if (this.flashCameraPosition || this.lineupCameraPosition || !this.keys.size || !this.model) return false;
     const eye = this.#eyePosition();
     const forward = this.#forwardDirection();
     const horizontalForward = v3.normalize([forward[0], forward[1], 0]);
@@ -600,7 +738,7 @@ export class ViewerRenderer {
       if (this.interactionLocked) return;
       this.canvas.focus();
       this.canvas.setPointerCapture(event.pointerId);
-      const mode = this.flashCameraPosition ? "look" : event.button === 0 && !event.shiftKey ? "orbit" : "pan";
+      const mode = (this.flashCameraPosition || this.lineupCameraPosition) ? "look" : event.button === 0 && !event.shiftKey ? "orbit" : "pan";
       drag = { x: event.clientX, y: event.clientY, mode };
       this.canvas.classList.add("dragging");
     });
@@ -632,7 +770,7 @@ export class ViewerRenderer {
     this.canvas.addEventListener("pointercancel", endDrag);
     this.canvas.addEventListener("wheel", (event) => {
       event.preventDefault();
-      if (this.flashCameraPosition) return;
+      if (this.flashCameraPosition || this.lineupCameraPosition) return;
       const factor = Math.exp(Math.sign(event.deltaY) * Math.min(Math.abs(event.deltaY), 200) * 0.0015);
       this.camera.distance = Math.max(this.sceneRadius * 0.0005, this.camera.distance * factor);
       this.camera.orthoSize = Math.max(this.sceneRadius * 0.0005, this.camera.orthoSize * factor);

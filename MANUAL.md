@@ -15,7 +15,9 @@ Both tools use Awpy `.tri` map geometry and raycasts. They model static geometry
 python viewer.py
 ```
 
-Open or drop a `.dem`, choose a round and player, then select Vision or Flash and click **Analyze**. Vision supports an instant timestamp or a start/end interval. Interval results include a timeline with current and accumulated visibility modes. Flash events are grouped by team; manual flashes can be entered as XYZ coordinates or placed by clicking the map.
+Open or drop a `.dem`, then select Vision, Flash, or Lineups. Vision supports an instant timestamp or a start/end interval. Interval results include a timeline with current and accumulated visibility modes. Flash events are grouped by team; manual flashes can be entered as XYZ coordinates or placed by clicking the map. Lineups are detected automatically at load time and do not need a separate Analyze action.
+
+In **Lineups**, filter by round, grenade, player, or reference quality and select a throw. The viewport uses blue for the stand/reference marker, orange for release, cyan for movement, and yellow for recorded aim. **Frame** fits the complete approach, **View aim** enters the player's recorded eye position and angles, and Escape exits that view. The detail card provides movement instructions, classification, speed, warnings, and copyable console commands. Filtered records can be downloaded as JSON or CFG and are retained when saving a new `.cs2session`.
 
 Results remain in memory. **Export GLB** writes only the currently displayed snapshot. **Save session** creates a replayable `.cs2session` with normalized demo data, map geometry, and the current result; it can be reopened without the original `.dem`.
 

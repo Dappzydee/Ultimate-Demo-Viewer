@@ -15,6 +15,13 @@ import trimesh
 from cs2_visibility.analysis import VisibilityAnalyzer
 from cs2_visibility.flash_events import FlashDetonation
 from cs2_visibility.flash_coverage import FlashCoverageAnalyzer, FlashCoverageConfig
+from cs2_visibility.grenade_lineups import (
+    IN_ATTACK,
+    GrenadeLineupConfig,
+    GrenadeRelease,
+    ThrowPose,
+    derive_grenade_lineup,
+)
 from cs2_visibility.interchange import (
     decode_flash_intensities,
     decode_visibility_timeline,
@@ -135,6 +142,14 @@ class VisibilityTimelineTests(unittest.TestCase):
 
 class SessionArchiveTests(unittest.TestCase):
     def make_session(self) -> DemoSession:
+        throw_poses = [
+            ThrowPose(124, (1, 2, 3), -10, 90, button_mask=IN_ATTACK),
+            ThrowPose(128, (1, 2, 3), -10, 90, button_mask=IN_ATTACK),
+        ]
+        lineup = derive_grenade_lineup(
+            GrenadeRelease("flashbang", "7", "Player", 1, 128, throw_poses[-1]),
+            throw_poses, GrenadeLineupConfig(),
+        )
         return DemoSession(
             source_name="match.dem", map_name="de_test", tick_rate=64,
             rounds=[RoundInfo(1, 0, 64, 704)],
@@ -148,7 +163,7 @@ class SessionArchiveTests(unittest.TestCase):
             pose_pitches=np.array([0, 5], dtype=np.float32),
             pose_ducks=np.array([0, 1], dtype=np.float32),
             flashes=[FlashDetonation(0, 128, (1, 2, 3), "de_test", 1, "Player", "7", "ct", "Example")],
-            mesh=synthetic_mesh(),
+            mesh=synthetic_mesh(), lineups=[lineup], lineups_available=True,
         )
 
     def test_archive_reopens_without_the_demo(self) -> None:
@@ -160,6 +175,8 @@ class SessionArchiveTests(unittest.TestCase):
         self.assertEqual(restored.map_name, "de_test")
         self.assertEqual(restored.players[0].name, "Player")
         self.assertEqual(restored.flashes[0].thrower_team, "Example")
+        self.assertTrue(restored.lineups_available)
+        self.assertEqual(restored.lineups[0].setang_command, "setang -10 90 0")
         self.assertEqual(restored.saved_analysis_data, b"saved-result")
         poses = restored.select_poses(
             "steam:7", 1, 1, 1, instant=True, tick_step=4, eye_height=64, crouch_eye_height=46,

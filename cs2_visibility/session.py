@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from io import BytesIO
 import json
 from pathlib import Path
@@ -17,12 +17,25 @@ from .analysis import VisibilityAnalyzer, resolve_tri_path
 from .flash_coverage import FlashCoverageAnalyzer, FlashCoverageConfig, FlashCoverageResult
 from .flash_events import FlashDetonation, _first_value
 from .geometry import export_glb_bytes, interior_sample_points, load_tri_mesh
+from .grenade_lineups import (
+    GRENADE_WEAPONS,
+    GrenadeLineup,
+    GrenadeLineupConfig,
+    GrenadeRelease,
+    _pose_from_row,
+    _steamid,
+    derive_grenade_lineup,
+    discover_lineup_properties,
+)
 from .models import AnalysisConfig, PlayerPose, VisibilityTimelineResult
 from .raycasting import create_raycaster
 
 
 SESSION_SCHEMA_VERSION = 2
-ROUND_EVENTS = ["round_start", "round_freeze_end", "round_officially_ended", "flashbang_detonate"]
+ROUND_EVENTS = [
+    "round_start", "round_freeze_end", "round_officially_ended",
+    "flashbang_detonate", "weapon_fire",
+]
 
 
 @dataclass(frozen=True)
@@ -111,6 +124,7 @@ class DemoSession:
         pose_ticks: np.ndarray, pose_rounds: np.ndarray, pose_players: np.ndarray,
         pose_positions: np.ndarray, pose_yaws: np.ndarray, pose_pitches: np.ndarray,
         pose_ducks: np.ndarray, flashes: list[FlashDetonation], mesh: trimesh.Trimesh,
+        lineups: list[GrenadeLineup] | None = None, lineups_available: bool | None = None,
     ) -> None:
         self.source_name = source_name
         self.map_name = map_name
@@ -126,6 +140,8 @@ class DemoSession:
         self.pose_pitches = pose_pitches
         self.pose_ducks = pose_ducks
         self.flashes = flashes
+        self.lineups = lineups or []
+        self.lineups_available = bool(lineups is not None) if lineups_available is None else bool(lineups_available)
         self.mesh = mesh
         self.map_context = MapAnalysisContext(mesh)
         self._player_index = {player.id: index for index, player in enumerate(players)}
@@ -141,8 +157,11 @@ class DemoSession:
         tick_rate_override: float | None = None,
     ) -> "DemoSession":
         demo = Demo(str(demo_path), verbose=False)
+        lineup_props = discover_lineup_properties(demo.parser.list_updated_fields())
+        player_props = ["X", "Y", "Z", "pitch", "yaw", "duck_amount", "team_name", "team_clan_name"]
+        player_props.extend(value for value in lineup_props.values() if value is not None)
         demo.parse(
-            player_props=["X", "Y", "Z", "pitch", "yaw", "duck_amount", "team_name", "team_clan_name"],
+            player_props=list(dict.fromkeys(player_props)),
             events=ROUND_EVENTS,
         )
         map_name = demo.header.get("map_name") or demo.header.get("map")
@@ -165,6 +184,9 @@ class DemoSession:
             demo.events.get("flashbang_detonate"), str(map_name), rounds,
             players, round_players, pose_ticks, pose_players,
         )
+        lineups = cls._normalize_lineups(
+            demo.events.get("weapon_fire"), demo.ticks, rounds, tick_rate, lineup_props,
+        )
         mesh = load_tri_mesh(resolve_tri_path(str(map_name), tri_path))
         return cls(
             source_name=demo_path.name, map_name=str(map_name), tick_rate=tick_rate,
@@ -172,6 +194,7 @@ class DemoSession:
             pose_ticks=pose_ticks, pose_rounds=pose_rounds, pose_players=pose_players,
             pose_positions=pose_positions, pose_yaws=pose_yaws, pose_pitches=pose_pitches,
             pose_ducks=pose_ducks, flashes=flashes, mesh=mesh,
+            lineups=lineups, lineups_available=True,
         )
 
     @staticmethod
@@ -277,6 +300,54 @@ class DemoSession:
             ))
         return result
 
+    @staticmethod
+    def _normalize_lineups(
+        event_frame: Any, tick_frame: Any, rounds: list[RoundInfo], tick_rate: float,
+        props: dict[str, str | None],
+    ) -> list[GrenadeLineup]:
+        if event_frame is None or event_frame.is_empty():
+            return []
+        histories: dict[str, list[Any]] = {}
+        for row in tick_frame.sort("tick").iter_rows(named=True):
+            steamid = _steamid(row.get("steamid"))
+            pose = _pose_from_row(row, props)
+            if steamid is not None and pose is not None:
+                histories.setdefault(steamid, []).append(pose)
+        config = GrenadeLineupConfig(tick_rate=tick_rate)
+        lookback_ticks = max(2, round(config.lookback_seconds * tick_rate))
+        result: list[GrenadeLineup] = []
+        for row in event_frame.sort("tick").iter_rows(named=True):
+            grenade_type = GRENADE_WEAPONS.get(str(row.get("weapon") or "").lower())
+            steamid = _steamid(row.get("user_steamid"))
+            event_pose = _pose_from_row(row, props, event=True)
+            if grenade_type is None or steamid is None or event_pose is None:
+                continue
+            round_number = next(
+                (item.number for item in rounds if item.start_tick <= event_pose.tick <= item.end_tick), None,
+            )
+            release = GrenadeRelease(
+                grenade_type, steamid, str(row["user_name"]) if row.get("user_name") else None,
+                round_number, event_pose.tick, event_pose,
+            )
+            lower = event_pose.tick - lookback_ticks
+            history = [
+                sample for sample in histories.get(steamid, []) if lower <= sample.tick <= event_pose.tick
+            ]
+            exact_pose = next((sample for sample in reversed(history) if sample.tick == event_pose.tick), None)
+            if exact_pose is not None:
+                exact_pose = replace(
+                    exact_pose,
+                    button_mask=exact_pose.button_mask if exact_pose.button_mask is not None else event_pose.button_mask,
+                    walking=exact_pose.walking if exact_pose.walking is not None else event_pose.walking,
+                    grounded=exact_pose.grounded if exact_pose.grounded is not None else event_pose.grounded,
+                )
+                release = replace(release, pose=exact_pose)
+            try:
+                result.append(derive_grenade_lineup(release, history, config))
+            except ValueError:
+                continue
+        return result
+
     def metadata(self) -> dict[str, Any]:
         rounds = []
         for round_info in self.rounds:
@@ -306,6 +377,8 @@ class DemoSession:
             "vertexCount": len(self.mesh.vertices),
             "rounds": rounds,
             "flashes": [flash.to_json_dict() for flash in self.flashes],
+            "lineupsAvailable": self.lineups_available,
+            "lineups": [lineup.to_json_dict() for lineup in self.lineups],
         }
 
     def select_poses(
@@ -467,6 +540,8 @@ class DemoSession:
             pose_ducks=pose_values["ducks"],
             flashes=[FlashDetonation.from_json_dict(value) for value in metadata.get("flashes", [])],
             mesh=trimesh.Trimesh(vertices=vertices, faces=faces, process=False),
+            lineups=[GrenadeLineup.from_json_dict(value) for value in metadata.get("lineups", [])],
+            lineups_available=bool(metadata.get("lineupsAvailable", "lineups" in metadata)),
         )
         session.saved_analyses = saved_analyses
         if saved_analyses:

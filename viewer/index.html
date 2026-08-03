@@ -58,6 +58,7 @@
               <div class="task-tabs" role="tablist" aria-label="Analysis type" aria-orientation="vertical">
                 <button id="vision-tab" class="active" role="tab" aria-selected="true" aria-controls="vision-controls" data-analysis="vision">Vision</button>
                 <button id="flash-tab" role="tab" aria-selected="false" aria-controls="flash-controls" data-analysis="flash" tabindex="-1">Flash</button>
+                <button id="lineup-tab" role="tab" aria-selected="false" aria-controls="lineup-controls" data-analysis="lineup" tabindex="-1">Lineups</button>
               </div>
 
               <div class="task-pane">
@@ -132,6 +133,44 @@
                     </div>
                   </details>
                   <button id="analyze-flash-button" class="primary wide-button">Analyze flash</button>
+                </div>
+
+                <div id="lineup-controls" class="control-stack" role="tabpanel" aria-labelledby="lineup-tab" hidden>
+                  <div class="lineup-filter-grid">
+                    <label class="field">Round<select id="lineup-round-filter"></select></label>
+                    <label class="field">Grenade<select id="lineup-grenade-filter"></select></label>
+                    <label class="field">Player<select id="lineup-player-filter"></select></label>
+                    <label class="field">Reference
+                      <select id="lineup-reference-filter">
+                        <option value="all">All</option>
+                        <option value="fixed">Fixed only</option>
+                        <option value="motion">In-motion only</option>
+                      </select>
+                    </label>
+                  </div>
+                  <label class="toggle-field">
+                    <input id="focus-lineup-toggle" type="checkbox" checked>
+                    <span>Frame selected lineup</span>
+                  </label>
+                  <span class="hint">Lineups are detected automatically when a demo loads.</span>
+                  <div id="lineup-availability" class="lineup-notice" hidden></div>
+                  <div id="lineup-list" class="lineup-list" role="listbox" aria-label="Detected grenade lineups"></div>
+                  <div class="lineup-export-actions">
+                    <button id="export-lineups-json-button">Export filtered JSON</button>
+                    <button id="export-lineups-cfg-button">Export filtered CFG</button>
+                  </div>
+                  <div id="lineup-detail" class="lineup-detail" hidden>
+                    <div class="lineup-legend"><span class="reference-dot"></span>Reference <span class="release-dot"></span>Release <span class="aim-line"></span>Aim</div>
+                    <strong id="lineup-detail-title"></strong>
+                    <p id="lineup-instruction"></p>
+                    <dl id="lineup-details"></dl>
+                    <div class="lineup-command-box"><code id="lineup-setpos"></code><code id="lineup-setang"></code></div>
+                    <div class="lineup-actions">
+                      <button id="frame-lineup-button">Frame</button>
+                      <button id="lineup-camera-button" aria-pressed="false">View aim</button>
+                      <button id="copy-lineup-commands-button" class="primary">Copy commands</button>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>

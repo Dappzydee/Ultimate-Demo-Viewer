@@ -19,8 +19,10 @@ const appState = {
   playbackStartTick: 0,
   analysisType: "vision",
   selectedFlashIndex: null,
+  selectedLineupIndex: null,
   manualFlashPosition: null,
   flashCamera: false,
+  lineupCamera: false,
   resultHistory: null,
   flashMover: {
     enabled: false,
@@ -95,12 +97,15 @@ $("#projection-button").addEventListener("click", () => {
   renderer.setProjection(orthographic ? "orthographic" : "perspective");
 });
 
-for (const button of [$("#vision-tab"), $("#flash-tab")]) {
+const analysisTypes = ["vision", "flash", "lineup"];
+for (const button of analysisTypes.map((name) => $(`#${name}-tab`))) {
   button.addEventListener("click", () => setAnalysisType(button.dataset.analysis));
   button.addEventListener("keydown", (event) => {
     if (!["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(event.key)) return;
     event.preventDefault();
-    const nextType = button.dataset.analysis === "vision" ? "flash" : "vision";
+    const direction = ["ArrowDown", "ArrowRight"].includes(event.key) ? 1 : -1;
+    const current = analysisTypes.indexOf(button.dataset.analysis);
+    const nextType = analysisTypes[(current + direction + analysisTypes.length) % analysisTypes.length];
     setAnalysisType(nextType);
     $(`#${nextType}-tab`).focus();
   });
@@ -129,6 +134,17 @@ $("#copy-flash-position-button").addEventListener("click", () => {
 $("#move-flash-button").addEventListener("click", () => setMoveFlashMode(!appState.flashMover.enabled));
 $("#analyze-vision-button").addEventListener("click", () => analyzeCurrentSelection("vision"));
 $("#analyze-flash-button").addEventListener("click", () => analyzeCurrentSelection("flash"));
+for (const selector of ["#lineup-round-filter", "#lineup-grenade-filter", "#lineup-player-filter", "#lineup-reference-filter"]) {
+  $(selector).addEventListener("change", populateLineups);
+}
+$("#focus-lineup-toggle").addEventListener("change", () => {
+  if ($("#focus-lineup-toggle").checked) renderer.frameLineup();
+});
+$("#frame-lineup-button").addEventListener("click", () => renderer.frameLineup());
+$("#lineup-camera-button").addEventListener("click", () => setLineupCameraMode(!appState.lineupCamera));
+$("#copy-lineup-commands-button").addEventListener("click", copySelectedLineupCommands);
+$("#export-lineups-json-button").addEventListener("click", () => exportFilteredLineups("json"));
+$("#export-lineups-cfg-button").addEventListener("click", () => exportFilteredLineups("cfg"));
 
 $("#frame-slider").addEventListener("input", (event) => {
   stopPlayback();
@@ -139,6 +155,7 @@ $("#replay-mode").addEventListener("change", applyReplayFrame);
 $("#play-button").addEventListener("click", () => appState.playing ? stopPlayback() : startPlayback());
 
 window.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && appState.lineupCamera) { setLineupCameraMode(false); return; }
   if (event.key === "Escape" && appState.flashMover.enabled) { setMoveFlashMode(false); return; }
   if (event.key === "Escape" && appState.flashCamera) { setFlashCameraMode(false); return; }
   const key = event.key.toLowerCase();
@@ -218,8 +235,10 @@ async function uploadAndLoad(file, endpoint, title) {
   stopPlayback();
   setMoveFlashMode(false);
   setFlashCameraMode(false);
+  setLineupCameraMode(false);
   clearActiveResult();
   appState.manualFlashPosition = null;
+  appState.selectedLineupIndex = null;
   setLoading(true, title, `${file.name} · ${formatBytes(file.size)}`, 0);
   try {
     const job = await apiJson(endpoint, {
@@ -265,6 +284,8 @@ function installSessionControls() {
   roundSelect.replaceChildren(...session.rounds.map((round) => option(round.number, `Round ${round.number}`)));
   configureRound();
   populateFlashes();
+  configureLineupFilters();
+  populateLineups();
 }
 
 function configureRound() {
@@ -394,10 +415,235 @@ function selectFlash(index) {
   else if ($("#focus-flash-toggle").checked) focusSelectedFlash();
 }
 
+function configureLineupFilters() {
+  const lineups = appState.session?.lineups || [];
+  const replace = (selector, values, label) => {
+    const select = $(selector);
+    const previous = select.value || "all";
+    select.replaceChildren(option("all", label), ...values.map(([value, text]) => option(value, text)));
+    select.value = [...select.options].some((item) => item.value === previous) ? previous : "all";
+  };
+  const rounds = [...new Set(lineups.map((lineup) => lineup.round).filter((value) => value !== null))]
+    .sort((left, right) => left - right).map((value) => [value, `Round ${value}`]);
+  const grenades = [...new Set(lineups.map((lineup) => lineup.grenade_type))]
+    .sort().map((value) => [value, displayGrenade(value)]);
+  const players = [...new Map(lineups.map((lineup) => [lineup.thrower_steamid, lineup.thrower || lineup.thrower_steamid])).entries()]
+    .sort((left, right) => left[1].localeCompare(right[1]));
+  replace("#lineup-round-filter", rounds, "All rounds");
+  replace("#lineup-grenade-filter", grenades, "All grenades");
+  replace("#lineup-player-filter", players, "All players");
+}
+
+function filteredLineups() {
+  const lineups = appState.session?.lineups || [];
+  const round = $("#lineup-round-filter").value;
+  const grenade = $("#lineup-grenade-filter").value;
+  const player = $("#lineup-player-filter").value;
+  const reference = $("#lineup-reference-filter").value;
+  return lineups.map((lineup, index) => ({ lineup, index })).filter(({ lineup }) => (
+    (round === "all" || lineup.round === Number(round))
+    && (grenade === "all" || lineup.grenade_type === grenade)
+    && (player === "all" || lineup.thrower_steamid === player)
+    && (reference === "all" || (reference === "fixed") === Boolean(lineup.has_fixed_reference))
+  ));
+}
+
+function populateLineups() {
+  const list = $("#lineup-list");
+  const notice = $("#lineup-availability");
+  list.replaceChildren();
+  const available = appState.session?.lineupsAvailable !== false;
+  notice.hidden = available;
+  notice.textContent = available ? "" : "This older saved session has no lineup data. Reopen its original demo to detect lineups.";
+  const values = available ? filteredLineups() : [];
+  $("#export-lineups-json-button").disabled = !values.length;
+  $("#export-lineups-cfg-button").disabled = !values.length;
+  if (!values.some((item) => item.index === appState.selectedLineupIndex)) {
+    appState.selectedLineupIndex = values[0]?.index ?? null;
+  }
+  const groups = groupBy(values, (item) => item.lineup.round ?? "?");
+  for (const [round, groupValues] of groups) {
+    const group = document.createElement("div");
+    group.className = "lineup-group";
+    const heading = document.createElement("div");
+    heading.className = "lineup-group-heading";
+    heading.textContent = `Round ${round}`;
+    group.append(heading);
+    for (const { lineup, index } of groupValues) {
+      const button = document.createElement("button");
+      const selected = index === appState.selectedLineupIndex;
+      button.type = "button";
+      button.className = `lineup-row${selected ? " selected" : ""}`;
+      button.dataset.lineupIndex = String(index);
+      button.setAttribute("role", "option");
+      button.setAttribute("aria-selected", String(selected));
+      const title = document.createElement("span");
+      title.className = "lineup-row-title";
+      title.textContent = `${displayGrenade(lineup.grenade_type)} · ${lineup.thrower || "Unknown"}`;
+      const time = document.createElement("span");
+      time.className = "lineup-row-time";
+      const roundInfo = appState.session.rounds.find((item) => item.number === lineup.round);
+      const seconds = roundInfo ? (lineup.T_release - roundInfo.freezeEndTick) / appState.session.tickRate : 0;
+      time.textContent = formatTime(seconds);
+      const meta = document.createElement("span");
+      meta.className = "lineup-row-meta";
+      meta.textContent = `${lineup.throw_type.label} · ${lineup.has_fixed_reference ? "fixed reference" : "in motion"}`;
+      button.append(title, time, meta);
+      button.addEventListener("click", () => selectLineup(index));
+      group.append(button);
+    }
+    list.append(group);
+  }
+  if (!values.length) {
+    const empty = document.createElement("div");
+    empty.className = "flash-event-empty";
+    empty.textContent = available ? "No grenade lineups match these filters." : "No lineup data in this session.";
+    list.append(empty);
+    $("#lineup-detail").hidden = true;
+    if (appState.analysisType === "lineup") {
+      setLineupCameraMode(false);
+      renderer.setLineupVisualization(null);
+    }
+    return;
+  }
+  selectLineup(
+    appState.selectedLineupIndex,
+    appState.analysisType === "lineup" && $("#focus-lineup-toggle").checked,
+  );
+}
+
+function selectedLineup() {
+  return appState.selectedLineupIndex === null ? null : appState.session?.lineups?.[appState.selectedLineupIndex] || null;
+}
+
+function selectLineup(index, shouldFrame = $("#focus-lineup-toggle").checked) {
+  const lineup = appState.session?.lineups?.[index];
+  if (!lineup) return;
+  appState.selectedLineupIndex = index;
+  for (const button of document.querySelectorAll(".lineup-row")) {
+    const selected = Number(button.dataset.lineupIndex) === index;
+    button.classList.toggle("selected", selected);
+    button.setAttribute("aria-selected", String(selected));
+  }
+  renderLineupDetails(lineup);
+  if (appState.analysisType !== "lineup") return;
+  showLineupVisualization(lineup);
+  if (appState.lineupCamera) setLineupCameraMode(true);
+  else if (shouldFrame) renderer.frameLineup();
+}
+
+function renderLineupDetails(lineup) {
+  $("#lineup-detail").hidden = false;
+  $("#lineup-detail-title").textContent = `${displayGrenade(lineup.grenade_type)} · ${lineup.thrower || "Unknown player"}`;
+  $("#lineup-instruction").textContent = lineup.movement_instruction;
+  $("#lineup-setpos").textContent = lineup.setpos_command;
+  $("#lineup-setang").textContent = lineup.setang_command;
+  const speed = Math.hypot(Number(lineup.release_velocity.X), Number(lineup.release_velocity.Y));
+  const rows = [
+    ["Throw", lineup.throw_type.label],
+    ["Release", `Tick ${lineup.T_release} · ${speed.toFixed(1)} u/s`],
+    ["Reference", lineup.has_fixed_reference ? `Fixed · tick ${lineup.reference_tick}` : "In-motion fallback"],
+    ["Notes", (lineup.notes || []).join("; ") || "No warnings"],
+  ];
+  $("#lineup-details").replaceChildren(...rows.map(([key, value]) => {
+    const row = document.createElement("div");
+    const term = document.createElement("dt"); term.textContent = key;
+    const definition = document.createElement("dd"); definition.textContent = value;
+    row.append(term, definition);
+    return row;
+  }));
+}
+
+function lineupPosePosition(pose) {
+  return [Number(pose.X), Number(pose.Y), Number(pose.Z)];
+}
+
+function lineupViewPose(lineup) {
+  const pose = lineup.reference_point || lineup.release;
+  const duck = Math.max(0, Math.min(1, Number(pose.duck_amount || 0)));
+  const position = lineupPosePosition(pose);
+  position[2] += 64 + (46 - 64) * duck;
+  return { position, yaw: Number(pose.yaw), pitch: Number(pose.pitch) };
+}
+
+function showLineupVisualization(lineup) {
+  const view = lineupViewPose(lineup);
+  renderer.setLineupVisualization({
+    reference: lineup.reference_point ? lineupPosePosition(lineup.reference_point) : null,
+    release: lineupPosePosition(lineup.release),
+    path: (lineup.movement_path || []).map(lineupPosePosition),
+    aim: { origin: view.position, yaw: view.yaw, pitch: view.pitch },
+  });
+}
+
+function setLineupCameraMode(enabled) {
+  const lineup = selectedLineup();
+  if (enabled && (!lineup || appState.analysisType !== "lineup")) return;
+  appState.lineupCamera = Boolean(enabled);
+  if (enabled && $("#projection-button").textContent !== "Perspective") $("#projection-button").click();
+  renderer.setLineupCamera(enabled ? lineupViewPose(lineup) : null);
+  viewport.classList.toggle("lineup-camera-active", appState.lineupCamera);
+  const button = $("#lineup-camera-button");
+  button.classList.toggle("active", appState.lineupCamera);
+  button.setAttribute("aria-pressed", String(appState.lineupCamera));
+  button.textContent = appState.lineupCamera ? "Exit aim view" : "View aim";
+  $("#projection-button").disabled = appState.lineupCamera || appState.flashCamera;
+  if (appState.lineupCamera) canvas.focus();
+}
+
+async function copySelectedLineupCommands() {
+  const lineup = selectedLineup();
+  if (!lineup) return;
+  const text = `${lineup.setpos_command}; ${lineup.setang_command}`;
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    const area = document.createElement("textarea");
+    area.value = text;
+    area.style.position = "fixed";
+    area.style.opacity = "0";
+    document.body.append(area);
+    area.select();
+    document.execCommand("copy");
+    area.remove();
+  }
+  const button = $("#copy-lineup-commands-button");
+  button.textContent = "Copied";
+  setTimeout(() => { button.textContent = "Copy commands"; }, 1200);
+}
+
+function exportFilteredLineups(format) {
+  const values = filteredLineups().map((item) => item.lineup);
+  if (!values.length) return;
+  const source = appState.session?.sourceName?.replace(/\.[^.]+$/, "") || "demo";
+  if (format === "json") {
+    downloadBlob(`${source}-lineups.json`, JSON.stringify(values, null, 2), "application/json");
+    return;
+  }
+  const blocks = values.map((lineup, index) => [
+    `// Lineup ${index + 1}: ${displayGrenade(lineup.grenade_type)} | ${lineup.throw_type.label} | round ${lineup.round ?? "?"}`,
+    `// ${lineup.movement_instruction}`,
+    lineup.setpos_command,
+    lineup.setang_command,
+  ].join("\n"));
+  downloadBlob(`${source}-lineups.cfg`, `${blocks.join("\n\n")}\n`, "text/plain");
+}
+
+function displayGrenade(value) {
+  return {
+    flashbang: "Flashbang", smokegrenade: "Smoke", hegrenade: "HE grenade",
+    molotov: "Molotov", incendiary: "Incendiary", decoy: "Decoy",
+    tagrenade: "Tactical grenade", snowball: "Snowball",
+  }[value] || value;
+}
+
 function setAnalysisType(type) {
+  const previousType = appState.analysisType;
   if (type !== "flash") setMoveFlashMode(false);
+  if (type !== "lineup") setLineupCameraMode(false);
   appState.analysisType = type;
-  for (const name of ["vision", "flash"]) {
+  if (previousType === "lineup" && type !== "lineup") restoreActiveVisualization();
+  for (const name of analysisTypes) {
     const button = $(`#${name}-tab`);
     const active = name === type;
     button.classList.toggle("active", active);
@@ -406,13 +652,21 @@ function setAnalysisType(type) {
   }
   $("#vision-controls").hidden = type !== "vision";
   $("#flash-controls").hidden = type !== "flash";
+  $("#lineup-controls").hidden = type !== "lineup";
   if (type === "flash") {
+    renderer.setLineupVisualization(null);
     renderer.setPlayerMarker(null);
     configureFlashSource();
-  }
-  else {
+  } else if (type === "lineup") {
     setFlashCameraMode(false);
     renderer.setMarker(null);
+    renderer.setPlayerMarker(null);
+    renderer.clearFaceValues();
+    populateLineups();
+  } else {
+    setFlashCameraMode(false);
+    renderer.setMarker(null);
+    renderer.setLineupVisualization(null);
     if (appState.replay?.type === "vision") applyReplayFrame();
   }
 }
@@ -503,7 +757,7 @@ function setFlashCameraMode(enabled) {
     renderer.setSelected("analysis-marker");
     renderer.setFlashCamera(position);
     viewport.classList.add("flash-camera-active");
-    $("#projection-button").disabled = true;
+    $("#projection-button").disabled = appState.flashCamera || appState.lineupCamera;
     $("#flash-camera-button").classList.add("active");
     $("#flash-camera-button").setAttribute("aria-pressed", "true");
     $("#flash-camera-button").textContent = "Exit flash camera";
@@ -513,7 +767,7 @@ function setFlashCameraMode(enabled) {
   appState.flashCamera = false;
   renderer.setFlashCamera(null);
   viewport.classList.remove("flash-camera-active");
-  $("#projection-button").disabled = false;
+  $("#projection-button").disabled = appState.flashCamera || appState.lineupCamera;
   $("#flash-camera-button").classList.remove("active");
   $("#flash-camera-button").setAttribute("aria-pressed", "false");
   $("#flash-camera-button").textContent = "Enter flash camera";
@@ -1119,6 +1373,7 @@ async function renameHistoryResult(result) {
 
 function clearActiveResult() {
   stopPlayback();
+  setLineupCameraMode(false);
   appState.activeResult = null;
   appState.replay = null;
   $("#result-section").hidden = true;
@@ -1127,6 +1382,7 @@ function clearActiveResult() {
   renderer.clearFaceValues();
   renderer.setMarker(null);
   renderer.setPlayerMarker(null);
+  renderer.setLineupVisualization(null);
 }
 
 function renderResultDetails(result) {
@@ -1175,6 +1431,7 @@ async function installModel(buffer, name) {
   $("#status-summary").textContent = `${formatNumber(parsed.triangleCount)} triangles · ${formatNumber(parsed.vertexCount)} vertices · ${formatBytes(parsed.sourceBytes)}`;
   dropZone.hidden = true;
   renderObjectList();
+  if (appState.analysisType === "lineup" && selectedLineup()) selectLineup(appState.selectedLineupIndex, false);
   canvas.focus();
 }
 
@@ -1277,6 +1534,15 @@ function download(url) {
   const link = document.createElement("a");
   link.href = url;
   link.click();
+}
+
+function downloadBlob(filename, content, contentType) {
+  const url = URL.createObjectURL(new Blob([content], { type: contentType }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
 const formatNumber = (value) => new Intl.NumberFormat().format(value);

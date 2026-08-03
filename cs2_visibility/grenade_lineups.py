@@ -108,8 +108,17 @@ class ThrowPose:
     def point_dict(self) -> dict[str, float]:
         return {
             "X": self.position[0], "Y": self.position[1], "Z": self.position[2],
-            "pitch": self.pitch, "yaw": self.yaw,
+            "pitch": self.pitch, "yaw": self.yaw, "duck_amount": self.duck_amount,
         }
+
+    @classmethod
+    def from_point_dict(cls, value: dict[str, Any], tick: int) -> "ThrowPose":
+        return cls(
+            tick=tick,
+            position=(float(value["X"]), float(value["Y"]), float(value["Z"])),
+            pitch=float(value["pitch"]), yaw=float(value["yaw"]),
+            duck_amount=float(value.get("duck_amount", 0.0)),
+        )
 
 
 @dataclass(frozen=True)
@@ -190,6 +199,45 @@ class GrenadeLineup:
             "setang_command": self.setang_command,
             "notes": list(self.notes),
         }
+
+    @classmethod
+    def from_json_dict(cls, value: dict[str, Any]) -> "GrenadeLineup":
+        release_tick = int(value["T_release"])
+        reference_value = value.get("reference_point")
+        angle_value = value.get("reference_angle_delta")
+        velocity_value = value.get("release_velocity") or {}
+        throw_value = value["throw_type"]
+        return cls(
+            grenade_type=str(value["grenade_type"]),
+            thrower_steamid=str(value["thrower_steamid"]),
+            thrower=value.get("thrower"),
+            round_number=int(value["round"]) if value.get("round") is not None else None,
+            release_tick=release_tick,
+            release=ThrowPose.from_point_dict(value["release"], release_tick),
+            reference_point=(
+                ThrowPose.from_point_dict(reference_value, int(value.get("reference_tick") or release_tick))
+                if reference_value else None
+            ),
+            has_fixed_reference=bool(value.get("has_fixed_reference")),
+            movement_path=tuple(
+                (float(point["X"]), float(point["Y"]), float(point["Z"]))
+                for point in value.get("movement_path", [])
+            ),
+            throw_type=ThrowType(
+                str(throw_value["click"]), str(throw_value["movement"]), bool(throw_value["jumpthrow"]),
+            ),
+            movement_instruction=str(value.get("movement_instruction") or "Movement instructions unavailable."),
+            release_velocity=(
+                float(velocity_value.get("X", 0.0)), float(velocity_value.get("Y", 0.0)),
+                float(velocity_value.get("Z", 0.0)),
+            ),
+            reference_angle_delta=(
+                (float(angle_value["pitch"]), float(angle_value["yaw"])) if angle_value else None
+            ),
+            setpos_command=str(value["setpos_command"]),
+            setang_command=str(value["setang_command"]),
+            notes=tuple(str(note) for note in value.get("notes", [])),
+        )
 
 
 def _angle_delta(left: float, right: float) -> float:

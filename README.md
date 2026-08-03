@@ -12,10 +12,12 @@ python viewer.py
 
 The command opens a local browser window. Use **Open demo** or drop a `.dem` onto the app, then:
 
-1. Choose the exclusive **Vision** or **Flash** task tab.
+1. Choose the exclusive **Vision**, **Flash**, or **Lineups** task tab.
 2. In Vision, select a round, player, and instant or interval/replay time.
 3. In Flash, select a recorded flash or switch to **Placed flash** and enable **Move flash**.
 4. Click the task-specific **Analyze vision** or **Analyze flash** button and inspect the result immediately.
+
+The **Lineups** tab needs no Analyze button: grenade throws are detected while the demo loads. Filter them by round, grenade, player, or fixed/in-motion reference; select one to see its reference and release markers, movement path, recorded aim ray, instructions, warnings, and console commands. **View aim** enters the recorded player viewpoint, **Copy commands** copies a one-line `setpos`/`setang` sequence, and the filtered result can be downloaded as JSON or CFG. Lineups are preserved in newly saved `.cs2session` archives; older sessions explain that their original demo must be reopened.
 
 The parsed demo, map geometry, interior face samples, and CPU/GPU raycaster remain available for repeated analyses. Identical requests reuse their existing result. With NVIDIA Warp, static samples stay in GPU memory while distance/FOV filtering, raycasting, cumulative sample tracking, face reduction, and bit packing run in fused CUDA kernels; only compact masks or intensities return to the CPU. This optimization does not reduce the configured sample count, pose cadence, range, or visibility threshold. Vision replays can switch between the player's current view and accumulated visibility while an optional position-and-facing marker follows the analyzed player. Flash analysis supports demo events and an interactive placed flash; no coordinate entry is required. A placed flash can copy any recorded pop position from the team-grouped selector, then **Move flash** keeps it centered in view and moves it relative to the camera with WASD, Q/E for height, and Shift for faster movement. The viewport shows throttled one-sample coverage previews while moving and after stopping. These previews are transient and do not fill Analysis history; the configured full-quality calculation runs only when **Analyze flash** is clicked. Selecting a recorded flash can automatically focus it, and Flash camera places the viewpoint at its exact position for look-around inspection.
 
@@ -101,7 +103,7 @@ The GLB also includes a separate bright yellow object named `flash_detonation_ma
 
 ## Grenade lineup extraction
 
-Detect every grenade release in a demo and print a practicable stand/aim point plus movement and throw metadata:
+The integrated viewer exposes detected throws in its **Lineups** tab. For scripts or bulk processing, detect every grenade release from the command line and print a practicable stand/aim point plus movement and throw metadata:
 
 ```powershell
 python grenade-lineups.py match.dem --json lineups.json --commands lineups.cfg

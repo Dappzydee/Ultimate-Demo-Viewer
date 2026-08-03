@@ -60,6 +60,10 @@ class GrenadeLineupTests(unittest.TestCase):
         self.assertEqual(record["T_release"], 8)
         self.assertEqual(record["reference_point"]["X"], 0)
         self.assertEqual(record["throw_type"]["movement"], "running")
+        restored = type(lineup).from_json_dict(record)
+        self.assertEqual(restored.movement_instruction, lineup.movement_instruction)
+        self.assertEqual(restored.reference_point.position, lineup.reference_point.position)
+        self.assertEqual(restored.throw_type, lineup.throw_type)
 
     def test_standing_throw_collapses_reference_to_release(self) -> None:
         samples = [pose(tick, 1) for tick in range(6)]

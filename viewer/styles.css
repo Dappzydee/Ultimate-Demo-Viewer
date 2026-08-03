@@ -79,6 +79,32 @@ summary { color: var(--muted); cursor: pointer; font-size: 11px; }
 .flash-event-time { color: #c4ccd4; font-variant-numeric: tabular-nums; }
 .flash-event-position { grid-column: 1 / -1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 10px; font-variant-numeric: tabular-nums; }
 .flash-event-empty { padding: 12px; color: var(--muted); line-height: 1.45; }
+.lineup-filter-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+.lineup-list { max-height: 290px; overflow-y: auto; border: 1px solid var(--line); border-radius: 4px; background: #11151a; }
+.lineup-group { padding: 7px; }
+.lineup-group + .lineup-group { border-top: 1px solid var(--line); }
+.lineup-group-heading { margin: 0 0 5px; padding: 0 2px; color: #aab3bd; font-size: 10px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; }
+.lineup-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 8px; width: 100%; margin: 2px 0; padding: 7px 8px; text-align: left; }
+.lineup-row.selected { background: var(--accent-soft); border-color: #9e6a25; color: #ffd79f; }
+.lineup-row-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 650; text-transform: capitalize; }
+.lineup-row-time { color: #c4ccd4; font-variant-numeric: tabular-nums; }
+.lineup-row-meta { grid-column: 1 / -1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 10px; }
+.lineup-notice { padding: 9px; border: 1px solid #594a2b; border-radius: 4px; background: #292312; color: #eacb91; font-size: 10px; line-height: 1.45; }
+.lineup-detail { display: grid; gap: 7px; padding-top: 9px; border-top: 1px solid var(--line-soft); }
+.lineup-detail > strong { text-transform: capitalize; }
+.lineup-detail p { margin: 0; color: #cbd4dc; font-size: 11px; line-height: 1.45; }
+.lineup-detail dl > div { grid-template-columns: 72px minmax(0, 1fr); padding: 2px 0; font-size: 10px; }
+.lineup-legend { display: flex; align-items: center; gap: 5px; color: var(--muted); font-size: 9px; text-transform: uppercase; letter-spacing: .04em; }
+.reference-dot, .release-dot { width: 8px; height: 8px; border-radius: 50%; }
+.reference-dot { background: #2aaeff; }
+.release-dot { margin-left: 5px; background: #ff8930; }
+.aim-line { width: 13px; height: 2px; margin-left: 5px; background: #ffd140; }
+.lineup-command-box { display: grid; gap: 3px; padding: 7px; border: 1px solid var(--line); border-radius: 4px; background: #0e1216; color: #b9e6c9; overflow-x: auto; }
+.lineup-command-box code { white-space: nowrap; font-size: 10px; }
+.lineup-actions { display: grid; grid-template-columns: .7fr 1fr 1.4fr; gap: 5px; }
+.lineup-actions button { min-width: 0; padding: 4px; font-size: 10px; }
+.lineup-export-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; }
+.lineup-export-actions button { padding: 4px; font-size: 10px; }
 .history-usage { color: var(--muted); font-size: 10px; font-variant-numeric: tabular-nums; }
 .history-warning { margin-bottom: 8px; padding: 7px; border: 1px solid #73562b; border-radius: 4px; background: #302512; color: #ffd797; font-size: 10px; line-height: 1.4; }
 .history-list { display: grid; gap: 6px; }
@@ -122,9 +148,12 @@ kbd { border: 1px solid #39424c; border-bottom-width: 2px; border-radius: 3px; b
 #viewport.flash-camera-active::after { content: "FLASH CAMERA"; position: absolute; z-index: 4; top: 10px; left: 10px; padding: 5px 8px; border: 1px solid #ffe878; border-radius: 3px; background: #332d12e8; color: #fff1a5; font-size: 10px; font-weight: 800; letter-spacing: .1em; pointer-events: none; }
 #viewport.move-flash-active::before { content: ""; position: absolute; z-index: 3; inset: 0; box-shadow: inset 0 0 0 4px #42c9e8; pointer-events: none; }
 #viewport.move-flash-active::after { content: "MOVE FLASH · WASD + Q/E"; position: absolute; z-index: 4; top: 10px; left: 10px; padding: 5px 8px; border: 1px solid #70ddf5; border-radius: 3px; background: #102d35e8; color: #b9f3ff; font-size: 10px; font-weight: 800; letter-spacing: .1em; pointer-events: none; }
+#viewport.lineup-camera-active::before { content: ""; position: absolute; z-index: 3; inset: 0; box-shadow: inset 0 0 0 4px #2aaeff; pointer-events: none; }
+#viewport.lineup-camera-active::after { content: "RECORDED LINEUP AIM"; position: absolute; z-index: 4; top: 10px; left: 10px; padding: 5px 8px; border: 1px solid #65c4ff; border-radius: 3px; background: #10283ae8; color: #c6ecff; font-size: 10px; font-weight: 800; letter-spacing: .1em; pointer-events: none; }
 #canvas { display: block; width: 100%; height: 100%; cursor: grab; }
 #viewport.flash-camera-active #canvas { cursor: crosshair; }
 #viewport.move-flash-active #canvas { cursor: default; }
+#viewport.lineup-camera-active #canvas { cursor: crosshair; }
 #canvas.dragging { cursor: grabbing; }
 .viewport-badge { position: absolute; top: 10px; right: 10px; padding: 4px 6px; border: 1px solid #37404a; border-radius: 3px; background: #151a20cc; color: #86919c; font-size: 10px; letter-spacing: .08em; pointer-events: none; }
 .drop-zone { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; text-align: center; background: radial-gradient(circle at 50% 42%, #252c34 0, #161a20 46%, #111419 100%); }
