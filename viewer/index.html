@@ -77,11 +77,13 @@
                   </label>
                   <p id="time-mode-help" class="mode-help"></p>
                   <div class="time-grid">
-                    <label class="field">Start <input id="start-time" type="number" min="0" step="0.1" value="0"></label>
-                    <label id="end-time-field" class="field">End <input id="end-time" type="number" min="0" step="0.1" value="10"></label>
+                    <label class="field">Start pose <output id="start-time" class="clock-output">1:55</output></label>
+                    <label id="end-time-field" class="field">End pose <output id="end-time" class="clock-output">1:45</output></label>
                   </div>
                   <input id="start-slider" type="range" min="0" max="10" step="0.1" value="0" aria-label="Start time">
                   <input id="end-slider" type="range" min="0" max="10" step="0.1" value="10" aria-label="End time">
+                  <div class="vision-preview-legend"><span class="vision-start-dot"></span>Start pose <span class="vision-end-dot"></span>End pose</div>
+                  <p id="vision-life-status" class="mode-help"></p>
                   <details>
                     <summary>Vision settings</summary>
                     <div class="settings-grid">

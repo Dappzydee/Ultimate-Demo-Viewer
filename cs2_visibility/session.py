@@ -34,10 +34,11 @@ from .models import AnalysisConfig, PlayerPose, VisibilityTimelineResult
 from .raycasting import create_raycaster
 
 
-SESSION_SCHEMA_VERSION = 2
+SESSION_SCHEMA_VERSION = 3
+ROUND_TIME_PROPERTY = "CCSGameRulesProxy.CCSGameRules.m_iRoundTime"
 ROUND_EVENTS = [
     "round_start", "round_freeze_end", "round_officially_ended",
-    "weapon_fire", *DETONATION_EVENTS,
+    "weapon_fire", "player_death", *DETONATION_EVENTS,
 ]
 
 
@@ -47,6 +48,7 @@ class RoundInfo:
     start_tick: int
     freeze_end_tick: int
     end_tick: int
+    clock_seconds: float
 
 
 @dataclass(frozen=True)
@@ -128,6 +130,7 @@ class DemoSession:
         pose_positions: np.ndarray, pose_yaws: np.ndarray, pose_pitches: np.ndarray,
         pose_ducks: np.ndarray, flashes: list[FlashDetonation], mesh: trimesh.Trimesh,
         lineups: list[GrenadeLineup] | None = None, lineups_available: bool | None = None,
+        player_end_ticks: dict[tuple[int, int], int] | None = None,
     ) -> None:
         self.source_name = source_name
         self.map_name = map_name
@@ -145,6 +148,7 @@ class DemoSession:
         self.flashes = flashes
         self.lineups = lineups or []
         self.lineups_available = bool(lineups is not None) if lineups_available is None else bool(lineups_available)
+        self.player_end_ticks = player_end_ticks or {}
         self.mesh = mesh
         self.map_context = MapAnalysisContext(mesh)
         self._player_index = {player.id: index for index, player in enumerate(players)}
@@ -161,7 +165,10 @@ class DemoSession:
     ) -> "DemoSession":
         demo = Demo(str(demo_path), verbose=False)
         lineup_props = discover_lineup_properties(demo.parser.list_updated_fields())
-        player_props = ["X", "Y", "Z", "pitch", "yaw", "duck_amount", "team_name", "team_clan_name"]
+        player_props = [
+            "X", "Y", "Z", "pitch", "yaw", "duck_amount", "health",
+            "team_name", "team_clan_name", ROUND_TIME_PROPERTY,
+        ]
         player_props.extend(value for value in lineup_props.values() if value is not None)
         demo.parse(
             player_props=list(dict.fromkeys(player_props)),
@@ -176,7 +183,7 @@ class DemoSession:
         tick_rate = tick_rate_override if tick_rate_override is not None else (
             float(header_rate) if isinstance(header_rate, (int, float)) and header_rate > 0 else 64.0
         )
-        rounds = cls._normalize_rounds(demo.rounds)
+        rounds = cls._normalize_rounds(demo.rounds, demo.ticks, tick_rate)
         if not rounds:
             raise ValueError("The demo contains no usable rounds.")
         (
@@ -190,6 +197,9 @@ class DemoSession:
         lineups = cls._normalize_lineups(
             demo.events, demo.ticks, rounds, tick_rate, lineup_props,
         )
+        player_end_ticks = cls._normalize_player_end_ticks(
+            demo.events.get("player_death"), rounds, players,
+        )
         mesh = load_tri_mesh(resolve_tri_path(str(map_name), tri_path))
         return cls(
             source_name=demo_path.name, map_name=str(map_name), tick_rate=tick_rate,
@@ -198,17 +208,47 @@ class DemoSession:
             pose_positions=pose_positions, pose_yaws=pose_yaws, pose_pitches=pose_pitches,
             pose_ducks=pose_ducks, flashes=flashes, mesh=mesh,
             lineups=lineups, lineups_available=True,
+            player_end_ticks=player_end_ticks,
         )
 
     @staticmethod
-    def _normalize_rounds(frame: Any) -> list[RoundInfo]:
+    def _normalize_rounds(frame: Any, tick_frame: Any, tick_rate: float) -> list[RoundInfo]:
         result = []
         for row in frame.sort("round_num").iter_rows(named=True):
             start = int(row["start"])
             freeze_end = int(row.get("freeze_end") if row.get("freeze_end") is not None else start)
             end_value = row.get("end") if row.get("end") is not None else row.get("official_end")
             end = int(end_value if end_value is not None else freeze_end)
-            result.append(RoundInfo(int(row["round_num"]), start, freeze_end, end))
+            round_number = int(row["round_num"])
+            clock_values = (
+                tick_frame.filter(tick_frame["round_num"] == round_number)[ROUND_TIME_PROPERTY].drop_nulls()
+                if ROUND_TIME_PROPERTY in tick_frame.columns else []
+            )
+            clock_seconds = float(clock_values[0]) if len(clock_values) else max(0.0, (end - freeze_end) / tick_rate)
+            result.append(RoundInfo(round_number, start, freeze_end, end, clock_seconds))
+        return result
+
+    @staticmethod
+    def _normalize_player_end_ticks(
+        death_frame: Any, rounds: list[RoundInfo], players: list[PlayerInfo],
+    ) -> dict[tuple[int, int], int]:
+        result = {
+            (round_info.number, player_index): round_info.end_tick
+            for round_info in rounds for player_index in range(len(players))
+        }
+        if death_frame is None or death_frame.is_empty():
+            return result
+        by_steam = {player.steamid: index for index, player in enumerate(players) if player.steamid}
+        by_name = {player.name: index for index, player in enumerate(players)}
+        for row in death_frame.sort("tick").iter_rows(named=True):
+            tick = int(row["tick"])
+            steamid = _steamid(row.get("user_steamid"))
+            player_index = by_steam.get(steamid) if steamid else by_name.get(str(row.get("user_name")))
+            round_info = next((item for item in rounds if item.start_tick <= tick <= item.end_tick), None)
+            if player_index is None or round_info is None or tick < round_info.freeze_end_tick:
+                continue
+            key = (round_info.number, player_index)
+            result[key] = min(result[key], tick)
         return result
 
     @staticmethod
@@ -369,9 +409,16 @@ class DemoSession:
                 if number != round_info.number:
                     continue
                 player = self.players[player_index]
+                end_tick = max(
+                    round_info.freeze_end_tick,
+                    min(self.player_end_ticks.get((number, player_index), round_info.end_tick), round_info.end_tick),
+                )
                 round_player_values.append({
                     "id": player.id, "name": player.name, "steamid": player.steamid,
                     "side": assignment.get("side"), "team": assignment.get("team"),
+                    "endTick": end_tick,
+                    "endSeconds": (end_tick - round_info.freeze_end_tick) / self.tick_rate,
+                    "survived": end_tick >= round_info.end_tick,
                 })
             round_player_values.sort(key=lambda item: ((item["side"] or ""), item["name"].lower()))
             rounds.append({
@@ -379,6 +426,7 @@ class DemoSession:
                 "startTick": round_info.start_tick,
                 "freezeEndTick": round_info.freeze_end_tick,
                 "endTick": round_info.end_tick,
+                "clockSeconds": round_info.clock_seconds,
                 "durationSeconds": max(0.0, (round_info.end_tick - round_info.freeze_end_tick) / self.tick_rate),
                 "players": round_player_values,
             })
@@ -392,6 +440,52 @@ class DemoSession:
             "flashes": [flash.to_json_dict() for flash in self.flashes],
             "lineupsAvailable": self.lineups_available,
             "lineups": [lineup.to_json_dict() for lineup in self.lineups],
+        }
+
+    def player_preview(
+        self, player_id: str, round_number: int, *, tick_step: int = 4,
+    ) -> dict[str, Any]:
+        """Return a lightweight alive-period pose path for the Vision controls."""
+        if player_id not in self._player_index:
+            raise ValueError("Selected player is not present in this session.")
+        if round_number not in self._round_index:
+            raise ValueError(f"Round {round_number} does not exist in this session.")
+        if tick_step < 1:
+            raise ValueError("Preview tick step must be positive.")
+        player_index = self._player_index[player_id]
+        round_info = self._round_index[round_number]
+        end_tick = min(
+            self.player_end_ticks.get((round_number, player_index), round_info.end_tick),
+            round_info.end_tick,
+        )
+        candidate_ids = np.flatnonzero(
+            (self.pose_players == player_index)
+            & (self.pose_rounds == round_number)
+            & (self.pose_ticks >= round_info.freeze_end_tick)
+            & (self.pose_ticks <= end_tick)
+        )
+        if not len(candidate_ids):
+            raise ValueError("The selected player has no alive poses in this round.")
+        selected_ids = candidate_ids[::tick_step]
+        if selected_ids[-1] != candidate_ids[-1]:
+            selected_ids = np.append(selected_ids, candidate_ids[-1])
+        poses = [
+            {
+                "tick": int(self.pose_ticks[index]),
+                "seconds": (int(self.pose_ticks[index]) - round_info.freeze_end_tick) / self.tick_rate,
+                "position": self.pose_positions[index].astype(float).tolist(),
+                "yaw": float(self.pose_yaws[index]),
+                "pitch": float(self.pose_pitches[index]),
+            }
+            for index in selected_ids
+        ]
+        return {
+            "playerId": player_id,
+            "roundNumber": round_number,
+            "clockSeconds": round_info.clock_seconds,
+            "endSeconds": max(0.0, (end_tick - round_info.freeze_end_tick) / self.tick_rate),
+            "survived": end_tick >= round_info.end_tick,
+            "poses": poses,
         }
 
     def select_poses(
@@ -408,10 +502,21 @@ class DemoSession:
             raise ValueError("Tick step must be at least 1.")
         player_index = self._player_index[player_id]
         round_info = self._round_index[round_number]
-        duration_seconds = max(0.0, (round_info.end_tick - round_info.freeze_end_tick) / self.tick_rate)
+        end_tick = min(
+            self.player_end_ticks.get((round_number, player_index), round_info.end_tick),
+            round_info.end_tick,
+        )
+        duration_seconds = max(0.0, (end_tick - round_info.freeze_end_tick) / self.tick_rate)
         if start_seconds > duration_seconds or end_seconds > duration_seconds:
-            raise ValueError(f"Selected time is outside round {round_number} (0-{duration_seconds:.1f} seconds).")
-        base = (self.pose_players == player_index) & (self.pose_rounds == round_number)
+            raise ValueError(
+                f"Selected time is outside this player's alive window (0-{duration_seconds:.1f} seconds)."
+            )
+        base = (
+            (self.pose_players == player_index)
+            & (self.pose_rounds == round_number)
+            & (self.pose_ticks >= round_info.freeze_end_tick)
+            & (self.pose_ticks <= end_tick)
+        )
         candidate_ids = np.flatnonzero(base)
         if not len(candidate_ids):
             raise ValueError("The selected player has no poses in this round.")
@@ -484,6 +589,10 @@ class DemoSession:
                 {"round": number, "player": player, **assignment}
                 for (number, player), assignment in self.round_players.items()
             ],
+            "playerEndTicks": [
+                {"round": number, "player": player, "tick": tick}
+                for (number, player), tick in self.player_end_ticks.items()
+            ],
             "analyses": [metadata for metadata, _ in analyses],
         }
         poses = BytesIO()
@@ -513,23 +622,21 @@ class DemoSession:
                 raise ValueError("Session archive is missing required data.")
             manifest = json.loads(archive.read("manifest.json"))
             schema_version = int(manifest.get("schemaVersion", 0))
-            if schema_version not in (1, SESSION_SCHEMA_VERSION):
-                raise ValueError("Unsupported session archive version.")
+            if schema_version != SESSION_SCHEMA_VERSION:
+                raise ValueError(
+                    f"This session uses schema {schema_version}; only schema {SESSION_SCHEMA_VERSION} is supported."
+                )
             metadata = manifest["metadata"]
             with np.load(BytesIO(archive.read("poses.npz")), allow_pickle=False) as poses:
                 pose_values = {name: poses[name].copy() for name in poses.files}
             with np.load(BytesIO(archive.read("geometry.npz")), allow_pickle=False) as geometry:
                 vertices, faces = geometry["vertices"].copy(), geometry["faces"].copy()
             saved_analyses: list[tuple[dict[str, Any], bytes]] = []
-            if schema_version == 1:
-                if manifest.get("analysis") is not None and "analysis.bin" in archive.namelist():
-                    saved_analyses.append((manifest["analysis"], archive.read("analysis.bin")))
-            else:
-                for index, analysis_metadata in enumerate(manifest.get("analyses", [])):
-                    analysis_path = f"analyses/{index}.bin"
-                    if analysis_path not in archive.namelist():
-                        raise ValueError(f"Session archive is missing {analysis_path}.")
-                    saved_analyses.append((analysis_metadata, archive.read(analysis_path)))
+            for index, analysis_metadata in enumerate(manifest.get("analyses", [])):
+                analysis_path = f"analyses/{index}.bin"
+                if analysis_path not in archive.namelist():
+                    raise ValueError(f"Session archive is missing {analysis_path}.")
+                saved_analyses.append((analysis_metadata, archive.read(analysis_path)))
         players = [PlayerInfo(**value) for value in manifest["players"]]
         round_players = {
             (int(value["round"]), int(value["player"])): {
@@ -541,9 +648,14 @@ class DemoSession:
             RoundInfo(
                 int(value["number"]), int(value["startTick"]),
                 int(value["freezeEndTick"]), int(value["endTick"]),
+                float(value["clockSeconds"]),
             )
             for value in metadata["rounds"]
         ]
+        player_end_ticks = {
+            (int(value["round"]), int(value["player"])): int(value["tick"])
+            for value in manifest["playerEndTicks"]
+        }
         session = cls(
             source_name=source_name, map_name=str(metadata["mapName"]), tick_rate=float(metadata["tickRate"]),
             rounds=rounds, players=players, round_players=round_players,
@@ -555,6 +667,7 @@ class DemoSession:
             mesh=trimesh.Trimesh(vertices=vertices, faces=faces, process=False),
             lineups=[GrenadeLineup.from_json_dict(value) for value in metadata.get("lineups", [])],
             lineups_available=bool(metadata.get("lineupsAvailable", "lineups" in metadata)),
+            player_end_ticks=player_end_ticks,
         )
         session.saved_analyses = saved_analyses
         if saved_analyses:

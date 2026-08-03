@@ -2,6 +2,16 @@
 
 All notable, explicitly versioned changes to this project are recorded here.
 
+## 0.8.0 - 2026-08-03 - Player paths and pose assets
+
+- Added immediate alive-period movement-path previews when selecting a Vision round and player.
+- Replaced elapsed-second Vision controls with the demo's reverse-counting round clock and capped each player's selection at their death or the round end.
+- Added simultaneous cyan start and orange end models for interval selection, with recorded position, yaw, and pitch; instant selection displays one model.
+- Added generated low-poly GLB assets for aiming, grenade holding, grenade throwing, and flashbang visualization, plus a deterministic asset-generation script.
+- Replaced generic replay and lineup objects with the new pose assets while retaining the established fixed and in-motion lineup color semantics.
+- Introduced `.cs2session` schema v3 for configured round clocks and player life-window end ticks; older session schemas are intentionally rejected.
+- Added preview API, archive, asset-serving, death-window, and viewer regression coverage; all 19 automated tests pass.
+
 ## 0.7.0 - 2026-08-03 - Grenade lineup viewer
 
 - Added a dedicated **Lineups** analysis tab with round, grenade, player, and fixed/in-motion filters, grouped throw selection, detail cards, console-command copying, and filtered JSON/CFG export.

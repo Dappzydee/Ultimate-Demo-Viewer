@@ -68,6 +68,8 @@ class ViewerServerTests(unittest.TestCase):
             self.assertIn(b'id="copy-flash-position-button"', application)
             self.assertNotIn(b'id="flash-x"', application)
             self.assertIn(b'id="player-marker-toggle"', application)
+            self.assertIn(b'id="start-time" class="clock-output"', application)
+            self.assertIn(b'id="vision-life-status"', application)
             self.assertIn(b'id="history-list"', application)
             self.assertIn(b'id="discarded-history-list"', application)
             self.assertIn(b'id="discarded-history-count"', application)
@@ -94,6 +96,8 @@ class ViewerServerTests(unittest.TestCase):
             self.assertIn(b"setLineupVisualization(value)", renderer)
             self.assertIn(b"setLineupCamera(pose)", renderer)
             self.assertIn(b"setLineupCameraFov(degrees)", renderer)
+            self.assertIn(b"setOverlayAssets(models)", renderer)
+            self.assertIn(b"setVisionPreview(value)", renderer)
             self.assertIn(b'"lineup-pin-pull"', renderer)
             self.assertIn(b'"lineup-detonation"', renderer)
             self.assertIn(b"frameLineup()", renderer)
@@ -106,12 +110,17 @@ class ViewerServerTests(unittest.TestCase):
             self.assertIn(b"populateLineups()", application_script)
             self.assertIn(b"copySelectedLineupCommands()", application_script)
             self.assertIn(b"exportFilteredLineups(format)", application_script)
+            self.assertIn(b'apiJson("/api/preview/player"', application_script)
+            self.assertIn(b"loadOverlayAssets()", application_script)
             self.assertNotIn(b"sessionResultIds", application_script)
             self.assertNotIn(b"history-save", application_script)
             self.assertNotIn(b"finalizeFlashMovement", application_script)
         with urlopen(f"{self.base_url}/model.glb") as response:
             self.assertEqual(response.headers["Content-Type"], "model/gltf-binary")
             self.assertEqual(response.read(), b"glTF-test-payload")
+        for asset in ("player-aim.glb", "player-hold.glb", "player-throw.glb", "flashbang.glb"):
+            with urlopen(f"{self.base_url}/assets/{asset}") as response:
+                self.assertEqual(response.read(4), b"glTF")
 
     def test_does_not_serve_files_outside_viewer_assets(self) -> None:
         with self.assertRaises(HTTPError) as error:

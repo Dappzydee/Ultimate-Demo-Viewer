@@ -43,7 +43,7 @@ An instant vision analysis selects the nearest valid pose to the requested round
 
 `.cs2session` is a versioned ZIP container with JSON metadata plus compressed NumPy arrays for normalized poses and map geometry. It may also contain the current packed analysis result. It deliberately does not embed the original demo. A reopened session can rerun analyses that need the captured fields, but a future visualization requiring new demo properties still needs the source `.dem`.
 
-New archives store already-derived lineup records in manifest metadata, so the Lineups tab works without the original demo or raw movement buttons. Older archives remain schema-compatible and explicitly report that lineup data is unavailable.
+Schema-v3 archives store already-derived lineup records, configured round clocks, and per-player life-window end ticks in manifest metadata, so previews and Lineups work without the original demo. Older archive schemas are intentionally rejected.
 
 Keep Awpy dataframe column naming inside the parsing modules. All other modules must work with typed records and NumPy arrays, so Awpy schema changes have one contained adaptation point.
 

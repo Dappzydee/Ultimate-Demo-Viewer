@@ -152,18 +152,19 @@ class SessionArchiveTests(unittest.TestCase):
         )
         return DemoSession(
             source_name="match.dem", map_name="de_test", tick_rate=64,
-            rounds=[RoundInfo(1, 0, 64, 704)],
+            rounds=[RoundInfo(1, 0, 64, 704, 115)],
             players=[PlayerInfo("steam:7", "Player", "7")],
             round_players={(1, 0): {"side": "ct", "team": "Example"}},
-            pose_ticks=np.array([64, 128], dtype=np.int64),
-            pose_rounds=np.array([1, 1], dtype=np.int16),
-            pose_players=np.array([0, 0], dtype=np.int16),
-            pose_positions=np.array([[0, 0, 0], [1, 2, 3]], dtype=np.float32),
-            pose_yaws=np.array([0, 90], dtype=np.float32),
-            pose_pitches=np.array([0, 5], dtype=np.float32),
-            pose_ducks=np.array([0, 1], dtype=np.float32),
+            pose_ticks=np.array([64, 128, 192], dtype=np.int64),
+            pose_rounds=np.array([1, 1, 1], dtype=np.int16),
+            pose_players=np.array([0, 0, 0], dtype=np.int16),
+            pose_positions=np.array([[0, 0, 0], [1, 2, 3], [9, 9, 9]], dtype=np.float32),
+            pose_yaws=np.array([0, 90, 180], dtype=np.float32),
+            pose_pitches=np.array([0, 5, 10], dtype=np.float32),
+            pose_ducks=np.array([0, 1, 0], dtype=np.float32),
             flashes=[FlashDetonation(0, 128, (1, 2, 3), "de_test", 1, "Player", "7", "ct", "Example")],
             mesh=synthetic_mesh(), lineups=[lineup], lineups_available=True,
+            player_end_ticks={(1, 0): 128},
         )
 
     def test_archive_reopens_without_the_demo(self) -> None:
@@ -177,7 +178,12 @@ class SessionArchiveTests(unittest.TestCase):
         self.assertEqual(restored.flashes[0].thrower_team, "Example")
         self.assertTrue(restored.lineups_available)
         self.assertEqual(restored.lineups[0].setang_command, "setang -10 90 0")
+        self.assertEqual(restored.metadata()["rounds"][0]["clockSeconds"], 115)
+        self.assertFalse(restored.metadata()["rounds"][0]["players"][0]["survived"])
         self.assertEqual(restored.saved_analysis_data, b"saved-result")
+        preview = restored.player_preview("steam:7", 1)
+        self.assertEqual(preview["endSeconds"], 1)
+        self.assertEqual(preview["poses"][-1]["yaw"], 90)
         poses = restored.select_poses(
             "steam:7", 1, 1, 1, instant=True, tick_step=4, eye_height=64, crouch_eye_height=46,
         )
@@ -186,7 +192,7 @@ class SessionArchiveTests(unittest.TestCase):
         hit = restored.map_context.pick_surface(np.zeros(3), np.array([1, 0, 0]))
         np.testing.assert_allclose(hit, [9, 0, 0])
 
-    def test_schema_one_archive_remains_supported(self) -> None:
+    def test_old_session_schema_is_rejected(self) -> None:
         current = self.make_session().to_archive(
             analysis_metadata={"analysisType": "flash", "source": "legacy"},
             analysis_data=b"legacy-result",
@@ -200,9 +206,8 @@ class SessionArchiveTests(unittest.TestCase):
             target.writestr("poses.npz", source.read("poses.npz"))
             target.writestr("geometry.npz", source.read("geometry.npz"))
             target.writestr("analysis.bin", source.read("analyses/0.bin"))
-        reopened = DemoSession.from_archive_bytes(legacy.getvalue(), "legacy.cs2session")
-        self.assertEqual(reopened.saved_analysis_data, b"legacy-result")
-        self.assertEqual(reopened.saved_analysis_metadata["source"], "legacy")
+        with self.assertRaisesRegex(ValueError, "only schema 3 is supported"):
+            DemoSession.from_archive_bytes(legacy.getvalue(), "legacy.cs2session")
 
     def test_application_job_reuses_the_loaded_session(self) -> None:
         session = self.make_session()
@@ -210,6 +215,9 @@ class SessionArchiveTests(unittest.TestCase):
         state = ApplicationState()
         state.session = session
         try:
+            preview = state.player_preview({"playerId": "steam:7", "roundNumber": 1, "tickStep": 1})
+            self.assertEqual(len(preview["poses"]), 2)
+            self.assertEqual(preview["clockSeconds"], 115)
             vision_request = {
                 "playerId": "steam:7", "roundNumber": 1, "timeMode": "instant",
                 "startSeconds": 1, "endSeconds": 1, "tickStep": 4,

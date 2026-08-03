@@ -79,6 +79,29 @@ void main() { outColor = v_color; }`;
 
 const TYPE_ENUM = { 5120: 0x1400, 5121: 0x1401, 5122: 0x1402, 5123: 0x1403, 5125: 0x1405, 5126: 0x1406 };
 
+function poseMatrix(position, yawDegrees = 0) {
+  const angle = Number(yawDegrees) * Math.PI / 180;
+  const cosine = Math.cos(angle), sine = Math.sin(angle);
+  const [x, y, z] = position.map(Number);
+  return new Float32Array([
+    cosine, sine, 0, 0,
+    -sine, cosine, 0, 0,
+    0, 0, 1, 0,
+    x, y, z, 1,
+  ]);
+}
+
+function pitchMatrix(pitchDegrees, pivotHeight = 51) {
+  const angle = Number(pitchDegrees) * Math.PI / 180;
+  const cosine = Math.cos(angle), sine = Math.sin(angle);
+  return new Float32Array([
+    cosine, 0, -sine, 0,
+    0, 1, 0, 0,
+    sine, 0, cosine, 0,
+    -sine * pivotHeight, 0, pivotHeight * (1 - cosine), 1,
+  ]);
+}
+
 export class ViewerRenderer {
   constructor(canvas, onStatus = () => {}) {
     this.canvas = canvas;
@@ -92,8 +115,16 @@ export class ViewerRenderer {
     this.markerResource = null;
     this.playerMarkerResource = null;
     this.lineupMarkerResources = [];
+    this.lineupAssetInstances = [];
     this.lineupLineResource = null;
     this.lineupBounds = null;
+    this.overlayAssetResources = new Map();
+    this.analysisAssetInstance = null;
+    this.replayPlayerInstance = null;
+    this.visionPreviewInstances = [];
+    this.visionPathResource = null;
+    this.visionSelectionResource = null;
+    this.visionPathSource = null;
     this.selectedId = null;
     this.shading = 0;
     this.exposure = 1;
@@ -124,6 +155,68 @@ export class ViewerRenderer {
     this.lineResources = this.#createReferenceLines(model.bounds);
     this.selectedId = null;
     this.frameBounds(model.bounds, true);
+  }
+
+  setOverlayAssets(models) {
+    for (const resources of this.overlayAssetResources.values()) {
+      for (const resource of resources) this.#disposeResource(resource);
+    }
+    this.overlayAssetResources.clear();
+    for (const [name, model] of Object.entries(models || {})) {
+      this.overlayAssetResources.set(
+        name, model.drawables.map((drawable) => this.#uploadDrawable(drawable)),
+      );
+    }
+    this.requestRender();
+  }
+
+  setVisionPreview(value) {
+    this.visionPreviewInstances = [];
+    if (!value) {
+      if (this.visionPathResource) this.#disposeLineResource(this.visionPathResource);
+      if (this.visionSelectionResource) this.#disposeLineResource(this.visionSelectionResource);
+      this.visionPathResource = null;
+      this.visionSelectionResource = null;
+      this.visionPathSource = null;
+      this.requestRender();
+      return;
+    }
+    const path = value.path || [];
+    if (path !== this.visionPathSource) {
+      if (this.visionPathResource) this.#disposeLineResource(this.visionPathResource);
+      const pathLines = [];
+      for (let index = 1; index < path.length; index++) {
+        const start = path[index - 1].position.map(Number);
+        const end = path[index].position.map(Number);
+        start[2] += 2; end[2] += 2;
+        pathLines.push([start, end, [0.18, 0.48, 0.65, 0.52]]);
+      }
+      this.visionPathResource = pathLines.length ? this.#createLineResource(pathLines) : null;
+      this.visionPathSource = path;
+    }
+    if (this.visionSelectionResource) this.#disposeLineResource(this.visionSelectionResource);
+    const selectedLines = [];
+    for (let index = 1; index < path.length; index++) {
+      const selected = path[index].seconds >= value.start.seconds
+        && path[index - 1].seconds <= value.end.seconds;
+      if (!selected) continue;
+      const start = path[index - 1].position.map(Number);
+      const end = path[index].position.map(Number);
+      start[2] += 2; end[2] += 2;
+      selectedLines.push([start, end, [0.20, 0.92, 1.0, 1.0]]);
+    }
+    this.visionSelectionResource = selectedLines.length ? this.#createLineResource(selectedLines) : null;
+    if (value.showModels !== false) {
+      this.visionPreviewInstances.push({
+        asset: "playerAim", id: "vision-start", position: value.start.position,
+        yaw: value.start.yaw, pitch: value.start.pitch, tint: [0.55, 1.0, 1.0, 1.0],
+      });
+      if (!value.instant) this.visionPreviewInstances.push({
+        asset: "playerAim", id: "vision-end", position: value.end.position,
+        yaw: value.end.yaw, pitch: value.end.pitch, tint: [1.0, 0.63, 0.28, 1.0],
+      });
+    }
+    this.requestRender();
   }
 
   setFaceValues(faceValues, mode) {
@@ -164,8 +257,17 @@ export class ViewerRenderer {
   setMarker(position, radius = 24) {
     if (this.markerResource) this.#disposeResource(this.markerResource);
     this.markerResource = null;
+    this.analysisAssetInstance = null;
     if (!position) {
       if (this.selectedId === "analysis-marker") this.selectedId = null;
+      this.requestRender();
+      return;
+    }
+    if (this.overlayAssetResources.has("flashbang")) {
+      this.analysisAssetInstance = {
+        asset: "flashbang", id: "analysis-marker", position: position.map(Number),
+        yaw: 0, pitch: 0, scale: 2.2, tint: [1.0, 0.95, 0.35, 1.0],
+      };
       this.requestRender();
       return;
     }
@@ -198,10 +300,20 @@ export class ViewerRenderer {
     this.requestRender();
   }
 
-  setPlayerMarker(position, yawDegrees = 0, visible = true) {
+  setPlayerMarker(position, yawDegrees = 0, visible = true, pitchDegrees = 0) {
+    this.replayPlayerInstance = null;
     if (!position || !visible) {
       if (this.playerMarkerResource) this.playerMarkerResource.drawable.visible = false;
       if (this.selectedId === "player-marker") this.selectedId = null;
+      this.requestRender();
+      return;
+    }
+    if (this.overlayAssetResources.has("playerAim")) {
+      if (this.playerMarkerResource) this.playerMarkerResource.drawable.visible = false;
+      this.replayPlayerInstance = {
+        asset: "playerAim", id: "player-marker", position: position.map(Number),
+        yaw: Number(yawDegrees), pitch: Number(pitchDegrees), tint: [0.45, 0.92, 1.0, 1.0],
+      };
       this.requestRender();
       return;
     }
@@ -249,6 +361,7 @@ export class ViewerRenderer {
   setLineupVisualization(value) {
     for (const resource of this.lineupMarkerResources) this.#disposeResource(resource);
     this.lineupMarkerResources = [];
+    this.lineupAssetInstances = [];
     if (this.lineupLineResource) this.#disposeLineResource(this.lineupLineResource);
     this.lineupLineResource = null;
     this.lineupBounds = null;
@@ -259,19 +372,43 @@ export class ViewerRenderer {
     const pinPull = value.pinPull?.map(Number) || null;
     const release = value.release.map(Number);
     const detonation = value.detonation?.map(Number) || null;
-    if (reference) this.lineupMarkerResources.push(this.#createMarkerResource(
-      "lineup-reference", "Lineup reference", reference, 22, [42, 174, 255, 255],
-    ));
-    if (!fixed && pinPull) this.lineupMarkerResources.push(this.#createMarkerResource(
-      "lineup-pin-pull", "Grenade pin pull", pinPull, 20, [169, 92, 255, 255],
-    ));
-    this.lineupMarkerResources.push(this.#createMarkerResource(
-      "lineup-release", "Grenade release", release, 18,
-      fixed ? [255, 137, 48, 255] : [42, 174, 255, 255],
-    ));
-    if (detonation) this.lineupMarkerResources.push(this.#createMarkerResource(
-      "lineup-detonation", "Grenade detonation", detonation, 24, [255, 64, 77, 255],
-    ));
+    const hasPlayers = this.overlayAssetResources.has("playerHold")
+      && this.overlayAssetResources.has("playerThrow");
+    if (hasPlayers) {
+      const holdPosition = fixed ? reference : pinPull;
+      if (holdPosition) this.lineupAssetInstances.push({
+        asset: "playerHold", id: fixed ? "lineup-reference" : "lineup-pin-pull",
+        position: holdPosition, yaw: Number(value.holdYaw ?? value.releaseYaw ?? 0),
+        pitch: Number(value.holdPitch ?? value.releasePitch ?? 0),
+        tint: fixed ? [0.35, 0.82, 1.0, 1.0] : [0.72, 0.42, 1.0, 1.0],
+      });
+      this.lineupAssetInstances.push({
+        asset: "playerThrow", id: "lineup-release", position: release,
+        yaw: Number(value.releaseYaw ?? 0), pitch: Number(value.releasePitch ?? 0),
+        tint: fixed ? [1.0, 0.58, 0.25, 1.0] : [0.35, 0.82, 1.0, 1.0],
+      });
+    } else {
+      if (reference) this.lineupMarkerResources.push(this.#createMarkerResource(
+        "lineup-reference", "Lineup reference", reference, 22, [42, 174, 255, 255],
+      ));
+      if (!fixed && pinPull) this.lineupMarkerResources.push(this.#createMarkerResource(
+        "lineup-pin-pull", "Grenade pin pull", pinPull, 20, [169, 92, 255, 255],
+      ));
+      this.lineupMarkerResources.push(this.#createMarkerResource(
+        "lineup-release", "Grenade release", release, 18,
+        fixed ? [255, 137, 48, 255] : [42, 174, 255, 255],
+      ));
+    }
+    if (detonation && value.grenadeType === "flashbang" && this.overlayAssetResources.has("flashbang")) {
+      this.lineupAssetInstances.push({
+        asset: "flashbang", id: "lineup-detonation", position: detonation,
+        yaw: 0, pitch: 0, scale: 2.2, tint: [1.0, 0.22, 0.26, 1.0],
+      });
+    } else if (detonation) {
+      this.lineupMarkerResources.push(this.#createMarkerResource(
+        "lineup-detonation", "Grenade detonation", detonation, 24, [255, 64, 77, 255],
+      ));
+    }
 
     const lines = [];
     const path = (value.path || []).map((point) => point.map(Number));
@@ -405,7 +542,15 @@ export class ViewerRenderer {
     const selected = this.selectedId === "analysis-marker" ? this.markerResource?.drawable
       : this.selectedId === "player-marker" ? this.playerMarkerResource?.drawable
         : this.model?.drawables.find((item) => item.id === this.selectedId);
-    this.frameBounds(selected?.bounds || this.model?.bounds);
+    const instance = [
+      this.analysisAssetInstance, this.replayPlayerInstance,
+      ...this.visionPreviewInstances, ...this.lineupAssetInstances,
+    ].find((item) => item?.id === this.selectedId);
+    const instanceBounds = instance ? {
+      min: [instance.position[0] - 42, instance.position[1] - 42, instance.position[2] - 12],
+      max: [instance.position[0] + 42, instance.position[1] + 42, instance.position[2] + 78],
+    } : null;
+    this.frameBounds(selected?.bounds || instanceBounds || this.model?.bounds);
   }
 
   setSelected(id) { this.selectedId = id; this.requestRender(); }
@@ -454,6 +599,8 @@ export class ViewerRenderer {
 
     if (this.lineResources && (this.showGrid || this.showAxes)) this.#drawReferenceLines(viewProjection);
     if (this.model) this.#drawModel(viewProjection);
+    if (this.visionPathResource) this.#drawLineResource(this.visionPathResource, viewProjection);
+    if (this.visionSelectionResource) this.#drawLineResource(this.visionSelectionResource, viewProjection);
     if (this.lineupLineResource) this.#drawLineupLines(viewProjection);
     this.needsRender = false;
 
@@ -494,6 +641,38 @@ export class ViewerRenderer {
         if (resource.indexBuffer) gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, resource.indexBuffer);
       }
     }
+    const overlayInstances = [
+      ...this.visionPreviewInstances,
+      ...(this.replayPlayerInstance ? [this.replayPlayerInstance] : []),
+      ...(this.analysisAssetInstance && !this.flashCameraPosition ? [this.analysisAssetInstance] : []),
+      ...this.lineupAssetInstances,
+    ];
+    for (const instance of overlayInstances) {
+      const assetResources = this.overlayAssetResources.get(instance.asset) || [];
+      const baseTransform = poseMatrix(instance.position, instance.yaw);
+      const scale = Number(instance.scale || 1);
+      if (scale !== 1) {
+        for (const offset of [0, 1, 2, 4, 5, 6, 8, 9, 10]) baseTransform[offset] *= scale;
+      }
+      for (const resource of assetResources) {
+        const drawable = resource.drawable;
+        const poseTransform = drawable.nodeName?.startsWith("look_")
+          ? multiply(baseTransform, pitchMatrix(instance.pitch || 0)) : baseTransform;
+        const modelMatrix = multiply(poseTransform, drawable.worldMatrix);
+        const tint = instance.tint || [1, 1, 1, 1];
+        const baseColor = drawable.baseColor.map((value, index) => value * tint[index]);
+        gl.bindVertexArray(resource.vao);
+        uniformMatrix(gl, this.program, "u_model", modelMatrix);
+        gl.uniform4fv(gl.getUniformLocation(this.program, "u_baseColor"), baseColor);
+        gl.uniform1i(gl.getUniformLocation(this.program, "u_hasColor"), Boolean(drawable.color));
+        gl.uniform1i(gl.getUniformLocation(this.program, "u_resultMode"), 0);
+        gl.uniform1i(gl.getUniformLocation(this.program, "u_selected"), instance.id === this.selectedId);
+        gl.uniform1i(gl.getUniformLocation(this.program, "u_wirePass"), false);
+        gl.disable(gl.CULL_FACE);
+        if (resource.indexBuffer) gl.drawElements(gl.TRIANGLES, resource.indexCount, resource.indexType, 0);
+        else gl.drawArrays(gl.TRIANGLES, 0, drawable.vertexCount);
+      }
+    }
     gl.bindVertexArray(null);
   }
 
@@ -508,11 +687,15 @@ export class ViewerRenderer {
   }
 
   #drawLineupLines(viewProjection) {
+    this.#drawLineResource(this.lineupLineResource, viewProjection);
+  }
+
+  #drawLineResource(resource, viewProjection) {
     const gl = this.gl;
     gl.useProgram(this.lineProgram);
     uniformMatrix(gl, this.lineProgram, "u_viewProjection", viewProjection);
-    gl.bindVertexArray(this.lineupLineResource.vao);
-    gl.drawArrays(gl.LINES, 0, this.lineupLineResource.vertexCount);
+    gl.bindVertexArray(resource.vao);
+    gl.drawArrays(gl.LINES, 0, resource.vertexCount);
     gl.bindVertexArray(null);
   }
 
@@ -677,11 +860,20 @@ export class ViewerRenderer {
     if (this.playerMarkerResource) this.#disposeResource(this.playerMarkerResource);
     for (const resource of this.lineupMarkerResources) this.#disposeResource(resource);
     if (this.lineupLineResource) this.#disposeLineResource(this.lineupLineResource);
+    if (this.visionPathResource) this.#disposeLineResource(this.visionPathResource);
+    if (this.visionSelectionResource) this.#disposeLineResource(this.visionSelectionResource);
     this.markerResource = null;
     this.playerMarkerResource = null;
     this.lineupMarkerResources = [];
     this.lineupLineResource = null;
+    this.visionPathResource = null;
+    this.visionSelectionResource = null;
+    this.visionPathSource = null;
     this.lineupBounds = null;
+    this.analysisAssetInstance = null;
+    this.replayPlayerInstance = null;
+    this.visionPreviewInstances = [];
+    this.lineupAssetInstances = [];
     if (this.lineResources) {
       gl.deleteVertexArray(this.lineResources.vao);
       gl.deleteBuffer(this.lineResources.positionBuffer);

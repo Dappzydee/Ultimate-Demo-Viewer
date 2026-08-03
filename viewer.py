@@ -442,6 +442,12 @@ class ApplicationState:
         )
         return hit.tolist() if hit is not None else None
 
+    def player_preview(self, request: dict[str, Any]) -> dict[str, Any]:
+        return self._require_session().player_preview(
+            str(request["playerId"]), int(request["roundNumber"]),
+            tick_step=int(request.get("tickStep", 4)),
+        )
+
 
 class ViewerRequestHandler(BaseHTTPRequestHandler):
     """Serve the app plus its local analysis API."""
@@ -543,6 +549,9 @@ class ViewerRequestHandler(BaseHTTPRequestHandler):
             if path == "/api/preview/flash":
                 job = self.server.app_state.start_flash(self._read_json(), preview=True)
                 self._send_json(job.to_json(), 202)
+                return
+            if path == "/api/preview/player":
+                self._send_json(self.server.app_state.player_preview(self._read_json()))
                 return
             if path.startswith("/api/results/") and path.endswith("/pin"):
                 result_id = path.removeprefix("/api/results/").removesuffix("/pin").strip("/")

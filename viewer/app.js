@@ -24,6 +24,8 @@ const appState = {
   flashCamera: false,
   lineupCamera: false,
   lineupAimRevision: 0,
+  playerPreview: null,
+  playerPreviewRevision: 0,
   resultHistory: null,
   flashMover: {
     enabled: false,
@@ -54,6 +56,7 @@ try {
   showError(error);
   throw error;
 }
+loadOverlayAssets().catch((error) => console.warn("Could not load viewer overlay assets.", error));
 
 const chooseDemo = () => $("#demo-input").click();
 const chooseSession = () => $("#session-input").click();
@@ -112,13 +115,15 @@ for (const button of analysisTypes.map((name) => $(`#${name}-tab`))) {
   });
 }
 $("#round-select").addEventListener("change", configureRound);
-$("#time-mode").addEventListener("change", configureTimeMode);
+$("#player-select").addEventListener("change", configureVisionPlayer);
+$("#time-mode").addEventListener("change", () => { configureTimeMode(); updateVisionPreview(); });
 $("#player-marker-toggle").addEventListener("change", () => {
+  updateVisionPreview();
   if (appState.replay?.type === "vision") applyReplayFrame();
   else renderer.setPlayerMarker(null);
 });
-bindTimeControl("#start-time", "#start-slider", true);
-bindTimeControl("#end-time", "#end-slider", false);
+bindTimeSlider("#start-slider", true);
+bindTimeSlider("#end-slider", false);
 $("#flash-source").addEventListener("change", () => {
   setMoveFlashMode(false);
   setFlashCameraMode(false);
@@ -276,7 +281,10 @@ async function refreshApplicationState(loadGeometry = false, loadLatestResult = 
   appState.resultHistory = state.resultHistory || null;
   if (!appState.session) return;
   if (loadGeometry || !hadSession) installSessionControls();
-  if (loadGeometry) await loadUrl("/api/geometry.glb", appState.session.mapName);
+  if (loadGeometry) {
+    await loadUrl("/api/geometry.glb", appState.session.mapName);
+    updateVisionPreview();
+  }
   renderHistory();
   const savedResult = loadLatestResult
     ? [...appState.results].reverse().find((result) => !result.discarded)
@@ -313,13 +321,37 @@ function configureRound() {
     for (const player of players) group.append(option(player.id, player.name));
     playerSelect.append(group);
   }
-  const maximum = Math.max(0, round.durationSeconds);
-  for (const selector of ["#start-slider", "#end-slider", "#start-time", "#end-time"]) $(selector).max = maximum.toFixed(2);
-  $("#start-time").value = "0";
+  configureVisionPlayer();
+}
+
+async function configureVisionPlayer() {
+  if (!appState.session) return;
+  const round = selectedRound();
+  const playerId = $("#player-select").value;
+  const player = round.players.find((item) => item.id === playerId);
+  if (!player) return;
+  const maximum = Math.max(0, Number(player.endSeconds));
+  for (const selector of ["#start-slider", "#end-slider"]) $(selector).max = maximum.toFixed(3);
   $("#start-slider").value = "0";
-  const defaultEnd = Math.min(10, maximum);
-  $("#end-time").value = defaultEnd.toFixed(1);
-  $("#end-slider").value = defaultEnd.toFixed(1);
+  $("#end-slider").value = Math.min(10, maximum).toFixed(1);
+  updateClockOutputs();
+  $("#vision-life-status").textContent = player.survived
+    ? `Selectable until the round ended at ${formatRoundClock(round.clockSeconds, maximum)}.`
+    : `Selectable until ${player.name} died at ${formatRoundClock(round.clockSeconds, maximum)}.`;
+  const revision = ++appState.playerPreviewRevision;
+  appState.playerPreview = null;
+  renderer.setVisionPreview(null);
+  try {
+    const preview = await apiJson("/api/preview/player", {
+      method: "POST",
+      body: JSON.stringify({ playerId, roundNumber: round.number, tickStep: 4 }),
+    });
+    if (revision !== appState.playerPreviewRevision) return;
+    appState.playerPreview = preview;
+    updateVisionPreview();
+  } catch (error) {
+    if (revision === appState.playerPreviewRevision) showError(error);
+  }
 }
 
 function populateFlashes() {
@@ -605,9 +637,14 @@ async function showLineupVisualization(lineup) {
   const cappedEndpoint = view.position.map((value, axis) => value + direction[axis] * maxDistance);
   const visualization = {
     fixed: Boolean(lineup.has_fixed_reference),
+    grenadeType: lineup.grenade_type,
     reference: lineup.reference_point ? lineupPosePosition(lineup.reference_point) : null,
     pinPull: lineup.pin_pull ? lineupPosePosition(lineup.pin_pull) : null,
     release: lineupPosePosition(lineup.release),
+    holdYaw: Number((lineup.reference_point || lineup.pin_pull || lineup.release).yaw),
+    holdPitch: Number((lineup.reference_point || lineup.pin_pull || lineup.release).pitch),
+    releaseYaw: Number(lineup.release.yaw),
+    releasePitch: Number(lineup.release.pitch),
     detonation: lineup.detonation ? lineupPosePosition(lineup.detonation) : null,
     path: (lineup.movement_path || []).map(lineupPosePosition),
     aim: { origin: view.position, endpoint: cappedEndpoint },
@@ -711,10 +748,12 @@ function setAnalysisType(type) {
   $("#flash-controls").hidden = type !== "flash";
   $("#lineup-controls").hidden = type !== "lineup";
   if (type === "flash") {
+    renderer.setVisionPreview(null);
     renderer.setLineupVisualization(null);
     renderer.setPlayerMarker(null);
     configureFlashSource();
   } else if (type === "lineup") {
+    renderer.setVisionPreview(null);
     setFlashCameraMode(false);
     renderer.setMarker(null);
     renderer.setPlayerMarker(null);
@@ -724,6 +763,7 @@ function setAnalysisType(type) {
     setFlashCameraMode(false);
     renderer.setMarker(null);
     renderer.setLineupVisualization(null);
+    updateVisionPreview();
     if (appState.replay?.type === "vision") applyReplayFrame();
   }
 }
@@ -737,23 +777,56 @@ function configureTimeMode() {
     : "Analyze start to end, then replay current or accumulated visibility.";
 }
 
-function bindTimeControl(numberSelector, sliderSelector, isStart) {
-  const number = $(numberSelector);
+function bindTimeSlider(sliderSelector, isStart) {
   const slider = $(sliderSelector);
-  const sync = (source, target) => {
-    target.value = source.value;
-    let start = Number($("#start-time").value);
-    let end = Number($("#end-time").value);
+  slider.addEventListener("input", () => {
+    let start = Number($("#start-slider").value);
+    let end = Number($("#end-slider").value);
     if (isStart && start > end) {
-      $("#end-time").value = String(start);
       $("#end-slider").value = String(start);
     } else if (!isStart && end < start) {
-      $("#start-time").value = String(end);
       $("#start-slider").value = String(end);
     }
-  };
-  number.addEventListener("input", () => sync(number, slider));
-  slider.addEventListener("input", () => sync(slider, number));
+    updateClockOutputs();
+    updateVisionPreview();
+  });
+}
+
+function updateClockOutputs() {
+  if (!appState.session) return;
+  const round = selectedRound();
+  $("#start-time").textContent = formatRoundClock(round.clockSeconds, Number($("#start-slider").value));
+  $("#end-time").textContent = formatRoundClock(round.clockSeconds, Number($("#end-slider").value));
+}
+
+function previewPoseAt(seconds) {
+  const poses = appState.playerPreview?.poses || [];
+  if (!poses.length) return null;
+  let low = 0, high = poses.length - 1;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    if (poses[middle].seconds < seconds) low = middle + 1;
+    else high = middle;
+  }
+  if (low > 0 && Math.abs(poses[low - 1].seconds - seconds) < Math.abs(poses[low].seconds - seconds)) return poses[low - 1];
+  return poses[low];
+}
+
+function updateVisionPreview() {
+  if (appState.analysisType !== "vision" || !appState.playerPreview) {
+    renderer.setVisionPreview(null);
+    return;
+  }
+  const instant = $("#time-mode").value === "instant";
+  const startSeconds = Number($("#start-slider").value);
+  const endSeconds = instant ? startSeconds : Number($("#end-slider").value);
+  const start = previewPoseAt(startSeconds);
+  const end = previewPoseAt(endSeconds);
+  if (!start || !end) { renderer.setVisionPreview(null); return; }
+  renderer.setVisionPreview({
+    path: appState.playerPreview.poses, start, end, instant,
+    showModels: $("#player-marker-toggle").checked,
+  });
 }
 
 function configureFlashSource() {
@@ -1050,8 +1123,8 @@ async function analyzeCurrentSelection(type) {
         playerId: $("#player-select").value,
         roundNumber: Number($("#round-select").value),
         timeMode: $("#time-mode").value,
-        startSeconds: Number($("#start-time").value),
-        endSeconds: Number($("#end-time").value),
+        startSeconds: Number($("#start-slider").value),
+        endSeconds: Number($("#end-slider").value),
         tickStep: Number($("#tick-step").value),
         fov: Number($("#vision-fov").value),
         maxDistance: Number($("#vision-distance").value),
@@ -1199,7 +1272,7 @@ function applyReplayFrame() {
     const poseOffset = appState.frame * replay.poseWidth;
     renderer.setPlayerMarker(
       [replay.poses[poseOffset], replay.poses[poseOffset + 1], replay.poses[poseOffset + 2]],
-      replay.poses[poseOffset + 3], true,
+      replay.poses[poseOffset + 3], true, replay.poses[poseOffset + 4],
     );
   } else {
     renderer.setPlayerMarker(null);
@@ -1560,6 +1633,27 @@ function bindToggle(selector, callback, initial = false) {
 
 function clickToggle(selector) { $(selector).click(); }
 
+async function loadOverlayAssets() {
+  const definitions = {
+    playerAim: "/assets/player-aim.glb",
+    playerHold: "/assets/player-hold.glb",
+    playerThrow: "/assets/player-throw.glb",
+    flashbang: "/assets/flashbang.glb",
+  };
+  const entries = await Promise.all(Object.entries(definitions).map(async ([name, url]) => {
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`Could not load ${url}.`);
+    return [name, parseGlb(await response.arrayBuffer(), url.split("/").pop())];
+  }));
+  renderer.setOverlayAssets(Object.fromEntries(entries));
+  updateVisionPreview();
+  if (appState.replay?.type === "vision") applyReplayFrame();
+  if (appState.analysisType === "flash") configureFlashSource();
+  if (appState.analysisType === "lineup" && selectedLineup()) {
+    showLineupVisualization(selectedLineup());
+  }
+}
+
 async function apiJson(url, options = {}) {
   const headers = new Headers(options.headers || {});
   if (typeof options.body === "string" && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
@@ -1604,6 +1698,10 @@ function downloadBlob(filename, content, contentType) {
 
 const formatNumber = (value) => new Intl.NumberFormat().format(value);
 const compactNumber = (value) => new Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 1 }).format(value);
+const formatRoundClock = (clockSeconds, elapsedSeconds) => {
+  const remaining = Math.max(0, Math.ceil(Number(clockSeconds) - Number(elapsedSeconds) - 1e-6));
+  return `${Math.floor(remaining / 60)}:${String(remaining % 60).padStart(2, "0")}`;
+};
 const formatTime = (seconds) => {
   const sign = seconds < 0 ? "−" : "";
   const absolute = Math.abs(seconds);

@@ -64,6 +64,11 @@ h2 { margin: 0 0 10px; color: #aab3bd; font-size: 11px; letter-spacing: .09em; t
 .mode-help { margin: -2px 0 1px; color: var(--muted); font-size: 10px; line-height: 1.45; }
 .time-grid, .settings-grid { display: grid; gap: 7px; }
 .time-grid { grid-template-columns: 1fr 1fr; }
+.clock-output { display: grid; place-items: center; min-height: 30px; border: 1px solid var(--line); border-radius: 4px; background: #20262d; color: var(--text); font-size: 14px; font-weight: 750; font-variant-numeric: tabular-nums; }
+.vision-preview-legend { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 9px; letter-spacing: .04em; text-transform: uppercase; }
+.vision-start-dot, .vision-end-dot { width: 8px; height: 8px; border-radius: 50%; }
+.vision-start-dot { background: #8cffff; }
+.vision-end-dot { margin-left: 5px; background: #ff9f47; }
 .settings-grid { grid-template-columns: 1fr 1fr; margin-top: 8px; }
 .wide-button { width: 100%; }
 details { border: 1px solid var(--line-soft); border-radius: 4px; padding: 7px; }
