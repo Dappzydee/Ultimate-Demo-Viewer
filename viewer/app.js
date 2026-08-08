@@ -24,7 +24,7 @@ const appState = {
   flashCamera: false,
   lineupCamera: false,
   lineupAimRevision: 0,
-  playerPreview: null,
+  playerPreviews: new Map(),
   playerPreviewRevision: 0,
   visionSelectionVisible: false,
   resultHistory: null,
@@ -116,7 +116,8 @@ for (const button of analysisTypes.map((name) => $(`#${name}-tab`))) {
   });
 }
 $("#round-select").addEventListener("change", configureRound);
-$("#player-select").addEventListener("change", configureVisionPlayer);
+$("#vision-coloring-toggle").addEventListener("change", updateAnalyzeVisionState);
+$("#gap-coloring-toggle").addEventListener("change", updateAnalyzeVisionState);
 $("#time-mode").addEventListener("change", () => {
   appState.visionSelectionVisible = true;
   configureTimeMode();
@@ -175,6 +176,8 @@ $("#frame-slider").addEventListener("input", (event) => {
   applyReplayFrame();
 });
 $("#replay-mode").addEventListener("change", applyReplayFrame);
+$("#playback-vision-toggle").addEventListener("change", applyReplayFrame);
+$("#playback-gap-toggle").addEventListener("change", applyReplayFrame);
 $("#play-button").addEventListener("click", () => appState.playing ? stopPlayback() : startPlayback());
 
 window.addEventListener("keydown", (event) => {
@@ -319,46 +322,71 @@ function configureRound() {
   const round = selectedRound();
   const playerSelect = $("#player-select");
   playerSelect.replaceChildren();
+  const playerList = $("#player-select-list");
+  playerList.replaceChildren();
   const groups = groupBy(round.players, (player) => player.team || player.side || "Unknown team");
   for (const [team, players] of groups) {
     const group = document.createElement("optgroup");
     group.label = displayTeam(team);
-    for (const player of players) group.append(option(player.id, player.name));
+    const heading = document.createElement("div"); heading.className = "player-team-heading"; heading.textContent = displayTeam(team);
+    playerList.append(heading);
+    for (const player of players) {
+      group.append(option(player.id, player.name));
+      const label = document.createElement("label"); label.className = "player-choice";
+      const input = document.createElement("input"); input.type = "checkbox"; input.value = player.id;
+      input.checked = playerList.querySelectorAll("input").length === 0;
+      input.addEventListener("change", configureVisionPlayers);
+      const hue = document.createElement("span"); hue.className = "player-hue"; hue.style.setProperty("--player-hue", String((playerList.querySelectorAll("input").length * 137.5) % 360));
+      const name = document.createElement("span"); name.textContent = player.name;
+      label.append(input, hue, name); playerList.append(label);
+    }
     playerSelect.append(group);
   }
-  configureVisionPlayer();
+  configureVisionPlayers();
 }
 
-async function configureVisionPlayer() {
+function selectedPlayerIds() {
+  return [...document.querySelectorAll("#player-select-list input:checked")].map((input) => input.value);
+}
+
+async function configureVisionPlayers() {
   if (!appState.session) return;
   const round = selectedRound();
-  const playerId = $("#player-select").value;
-  const player = round.players.find((item) => item.id === playerId);
-  if (!player) return;
+  const playerIds = selectedPlayerIds();
+  const players = playerIds.map((id) => round.players.find((item) => item.id === id)).filter(Boolean);
+  if (!players.length) {
+    appState.playerPreviews.clear(); renderer.setVisionPreview(null); updateAnalyzeVisionState(); return;
+  }
+  updateAnalyzeVisionState();
+  $("#player-select").value = players[0].id;
   appState.visionSelectionVisible = true;
-  const maximum = Math.max(0, Number(player.endSeconds));
+  const maximum = Math.max(0, Math.min(...players.map((player) => Number(player.endSeconds))));
   for (const selector of ["#start-slider", "#end-slider"]) $(selector).max = maximum.toFixed(3);
   $("#start-slider").value = "0";
   $("#end-slider").value = Math.min(10, maximum).toFixed(1);
   updateClockOutputs();
-  $("#vision-life-status").textContent = player.survived
-    ? `Selectable until the round ended at ${formatRoundClock(round.clockSeconds, maximum)}.`
-    : `Selectable until ${player.name} died at ${formatRoundClock(round.clockSeconds, maximum)}.`;
+  $("#vision-life-status").textContent = players.every((player) => player.survived)
+    ? `Shared selection runs until the round ended at ${formatRoundClock(round.clockSeconds, maximum)}.`
+    : `Shared selection stops at the earliest selected death (${formatRoundClock(round.clockSeconds, maximum)}).`;
   const revision = ++appState.playerPreviewRevision;
-  appState.playerPreview = null;
+  appState.playerPreviews.clear();
   renderer.setVisionPreview(null);
   renderer.setPlayerMarker(null);
   try {
-    const preview = await apiJson("/api/preview/player", {
-      method: "POST",
-      body: JSON.stringify({ playerId, roundNumber: round.number, tickStep: 4 }),
-    });
+    const previews = await Promise.all(playerIds.map((playerId) => apiJson("/api/preview/player", {
+      method: "POST", body: JSON.stringify({ playerId, roundNumber: round.number, tickStep: 4 }),
+    })));
     if (revision !== appState.playerPreviewRevision) return;
-    appState.playerPreview = preview;
+    previews.forEach((preview) => appState.playerPreviews.set(preview.playerId, preview));
     updateVisionPreview();
   } catch (error) {
     if (revision === appState.playerPreviewRevision) showError(error);
   }
+}
+
+function updateAnalyzeVisionState() {
+  $("#analyze-vision-button").disabled = !selectedPlayerIds().length
+    || (!$("#vision-coloring-toggle").checked && !$("#gap-coloring-toggle").checked);
 }
 
 function populateFlashes() {
@@ -820,8 +848,8 @@ function updateClockOutputs() {
   $("#end-time").textContent = formatRoundClock(round.clockSeconds, Number($("#end-slider").value));
 }
 
-function previewPoseAt(seconds) {
-  const poses = appState.playerPreview?.poses || [];
+function previewPoseAt(preview, seconds) {
+  const poses = preview?.poses || [];
   if (!poses.length) return null;
   let low = 0, high = poses.length - 1;
   while (low < high) {
@@ -834,19 +862,21 @@ function previewPoseAt(seconds) {
 }
 
 function updateVisionPreview() {
-  if (appState.analysisType !== "vision" || !appState.playerPreview || !appState.visionSelectionVisible) {
+  if (appState.analysisType !== "vision" || !appState.playerPreviews.size || !appState.visionSelectionVisible) {
     renderer.setVisionPreview(null);
     return;
   }
   const instant = $("#time-mode").value === "instant";
   const startSeconds = Number($("#start-slider").value);
   const endSeconds = instant ? startSeconds : Number($("#end-slider").value);
-  const start = previewPoseAt(startSeconds);
-  const end = previewPoseAt(endSeconds);
-  if (!start || !end) { renderer.setVisionPreview(null); return; }
+  const players = selectedPlayerIds().map((playerId) => {
+    const preview = appState.playerPreviews.get(playerId);
+    return { path: preview?.poses || [], start: previewPoseAt(preview, startSeconds), end: previewPoseAt(preview, endSeconds) };
+  }).filter((player) => player.start && player.end);
+  if (!players.length) { renderer.setVisionPreview(null); return; }
   renderer.setPlayerMarker(null);
   renderer.setVisionPreview({
-    path: appState.playerPreview.poses, start, end, instant,
+    players, instant,
     showModels: $("#player-marker-toggle").checked,
   });
 }
@@ -1142,7 +1172,7 @@ async function analyzeCurrentSelection(type) {
     if (isVision) {
       endpoint = "/api/analyze/vision";
       request = {
-        playerId: $("#player-select").value,
+        playerIds: selectedPlayerIds(),
         roundNumber: Number($("#round-select").value),
         timeMode: $("#time-mode").value,
         startSeconds: Number($("#start-slider").value),
@@ -1151,6 +1181,8 @@ async function analyzeCurrentSelection(type) {
         fov: Number($("#vision-fov").value),
         maxDistance: Number($("#vision-distance").value),
         samplesPerTriangle: Number($("#vision-samples").value),
+        visionEnabled: $("#vision-coloring-toggle").checked,
+        gapEnabled: $("#gap-coloring-toggle").checked,
       };
     } else {
       endpoint = "/api/analyze/flash";
@@ -1223,11 +1255,31 @@ async function loadResult(resultId) {
 }
 
 function installVisionReplay(buffer, metadata) {
-  const header = parseHeader(buffer, "CSV1");
+  const magic = String.fromCharCode(...new Uint8Array(buffer, 0, 4));
+  const header = parseHeader(buffer, magic === "CSV2" ? "CSV2" : "CSV1");
   appState.visionSelectionVisible = false;
   renderer.setVisionPreview(null);
   const ticksOffset = 24;
   const ticksBytes = header.frameCount * 4;
+  if (magic === "CSV2") {
+    const posesBytes = header.frameCount * 6 * 4;
+    const masksBytes = header.frameCount * header.width;
+    const blockBytes = posesBytes + masksBytes * 3;
+    if (buffer.byteLength !== ticksOffset + ticksBytes + blockBytes * header.extra) throw new Error("Vision / gap result is truncated.");
+    const players = [];
+    let blockOffset = ticksOffset + ticksBytes;
+    for (let index = 0; index < header.extra; index++) {
+      players.push({
+        poses: new Float32Array(buffer, blockOffset, header.frameCount * 6),
+        instant: new Uint8Array(buffer, blockOffset + posesBytes, masksBytes),
+        cumulative: new Uint8Array(buffer, blockOffset + posesBytes + masksBytes, masksBytes),
+        gaps: new Uint8Array(buffer, blockOffset + posesBytes + masksBytes * 2, masksBytes),
+      });
+      blockOffset += blockBytes;
+    }
+    appState.replay = { type: "vision", multi: true, faceCount: header.faceCount, frameCount: header.frameCount,
+      width: header.width, ticks: new Uint32Array(buffer, ticksOffset, header.frameCount), players, metadata };
+  } else {
   const posesOffset = ticksOffset + ticksBytes;
   const posesBytes = header.frameCount * header.poseWidth * 4;
   const masksOffset = posesOffset + posesBytes;
@@ -1242,12 +1294,17 @@ function installVisionReplay(buffer, metadata) {
     cumulative: new Uint8Array(buffer, masksOffset + masksBytes, masksBytes),
     metadata,
   };
+  }
   renderer.setMarker(null);
   appState.frame = Math.max(0, header.frameCount - 1);
   $("#frame-slider").max = String(Math.max(0, header.frameCount - 1));
   $("#frame-slider").value = String(appState.frame);
   $("#timeline").hidden = header.frameCount <= 1;
   $("#replay-mode").value = metadata.timeMode === "instant" ? "instant" : "cumulative";
+  $("#playback-vision-toggle").checked = metadata.visionEnabled !== false;
+  $("#playback-vision-toggle").disabled = metadata.visionEnabled === false;
+  $("#playback-gap-toggle").checked = metadata.gapEnabled === true;
+  $("#playback-gap-toggle").disabled = metadata.gapEnabled !== true;
   applyReplayFrame();
 }
 
@@ -1278,7 +1335,7 @@ function parseHeader(buffer, expectedMagic) {
   }
   return {
     version, faceCount: view.getUint32(8, true), frameCount: view.getUint32(12, true),
-    width: view.getUint32(16, true), poseWidth,
+    width: view.getUint32(16, true), poseWidth, extra: view.getUint32(20, true),
   };
 }
 
@@ -1287,6 +1344,10 @@ function applyReplayFrame() {
   if (!replay || replay.type !== "vision" || !replay.frameCount) return;
   appState.frame = Math.max(0, Math.min(appState.frame, replay.frameCount - 1));
   const mode = $("#replay-mode").value;
+  if (replay.multi) {
+    applyMultiVisionFrame(replay, mode);
+    return;
+  }
   const source = replay[mode];
   const offset = appState.frame * replay.width;
   const values = new Uint8Array(replay.faceCount);
@@ -1321,6 +1382,59 @@ function startPlayback() {
   appState.playbackStartTick = replay.ticks[appState.frame];
   $("#play-button").textContent = "Pause";
   requestAnimationFrame(playbackFrame);
+}
+
+function applyMultiVisionFrame(replay, mode) {
+  const colors = new Uint8Array(replay.faceCount * 4);
+  const showVision = $("#playback-vision-toggle").checked;
+  const showGaps = $("#playback-gap-toggle").checked;
+  for (let face = 0; face < replay.faceCount; face++) {
+    const visionPlayers = [], gapPlayers = [];
+    for (let playerIndex = 0; playerIndex < replay.players.length; playerIndex++) {
+      const player = replay.players[playerIndex];
+      const byte = appState.frame * replay.width + (face >> 3), bit = 1 << (face & 7);
+      if (showVision && (player[mode][byte] & bit)) visionPlayers.push(playerIndex);
+      if (showGaps && (player.gaps[byte] & bit)) gapPlayers.push(playerIndex);
+    }
+    let color = [0, 0, 0, 0];
+    if (visionPlayers.length && gapPlayers.length) color = [255, 218, 65, 220];
+    else if (visionPlayers.length > 1) color = [65, 245, 210, 220];
+    else if (gapPlayers.length > 1) color = [255, 80, 205, 220];
+    else if (visionPlayers.length) color = [...hslToRgb(playerFamilyHue("vision", visionPlayers[0]), 82, 55), 205];
+    else if (gapPlayers.length) color = [...hslToRgb(playerFamilyHue("gap", gapPlayers[0]), 92, 59), 195];
+    colors.set(color, face * 4);
+  }
+  renderer.setFaceColors(colors);
+  if ($("#player-marker-toggle").checked && appState.analysisType === "vision") {
+    const players = replay.players.map((player) => {
+      const offset = appState.frame * 6;
+      const pose = { position: [player.poses[offset], player.poses[offset + 1], player.poses[offset + 2]],
+        yaw: player.poses[offset + 3], pitch: player.poses[offset + 4], duck: player.poses[offset + 5] };
+      return { path: [], start: pose, end: pose };
+    });
+    renderer.setPlayerMarker(null);
+    renderer.setVisionPreview({ players, instant: true, showModels: true });
+  } else renderer.setVisionPreview(null);
+  $("#frame-slider").value = String(appState.frame);
+  const round = appState.session.rounds.find((item) => item.number === replay.metadata.roundNumber);
+  const seconds = round ? (replay.ticks[appState.frame] - round.freezeEndTick) / appState.session.tickRate : 0;
+  $("#replay-time").textContent = round ? formatRoundClock(round.clockSeconds, seconds) : "--:--";
+  $("#status-summary").textContent = `Frame ${appState.frame + 1}/${replay.frameCount} · ${replay.players.length} players · ${replay.metadata.backend}`;
+}
+
+function hslToRgb(hue, saturation, lightness) {
+  const s = saturation / 100, l = lightness / 100;
+  const c = (1 - Math.abs(2 * l - 1)) * s, x = c * (1 - Math.abs((hue / 60) % 2 - 1)), m = l - c / 2;
+  const rgb = hue < 60 ? [c, x, 0] : hue < 120 ? [x, c, 0] : hue < 180 ? [0, c, x]
+    : hue < 240 ? [0, x, c] : hue < 300 ? [x, 0, c] : [c, 0, x];
+  return rgb.map((value) => Math.round((value + m) * 255));
+}
+
+function playerFamilyHue(kind, index) {
+  const hues = kind === "vision"
+    ? [120, 138, 102, 150, 92, 160, 112, 145, 128, 98]
+    : [0, 350, 10, 340, 18, 332, 6, 345, 14, 355];
+  return hues[index % hues.length];
 }
 
 function playbackFrame(time) {
@@ -1434,7 +1548,7 @@ function renderHistoryRows(list, results, discarded) {
 
 function historyResultTitle(result) {
   if (result.name) return result.name;
-  if (result.analysisType === "vision") return `Vision · ${result.playerName || "Unknown player"}`;
+  if (result.analysisType === "vision") return `Vision / gaps · ${(result.playerNames || [result.playerName || "Unknown player"]).join(", ")}`;
   return `Flash · ${result.flash?.thrower || (result.source === "manual" ? "Manual placement" : "Unknown")}`;
 }
 
@@ -1547,7 +1661,7 @@ function clearActiveResult() {
 function renderResultDetails(result) {
   const details = $("#result-details");
   const rows = result.analysisType === "vision"
-    ? [["Type", result.timeMode === "instant" ? "Vision instant" : "Vision replay"], ["Player", result.playerName], ["Frames", formatNumber(result.frameCount)], ["Backend", result.backend], ["Rays", formatNumber(result.testedRays)]]
+    ? [["Type", result.timeMode === "instant" ? "Vision / gaps instant" : "Vision / gaps replay"], ["Players", (result.playerNames || [result.playerName]).join(", ")], ["Colorings", [result.visionEnabled !== false ? "vision" : null, result.gapEnabled ? "gaps" : null].filter(Boolean).join(" + ")], ["Frames", formatNumber(result.frameCount)], ["Backend", result.backend], ["Rays", formatNumber(result.testedRays)]]
     : [["Type", "Flash coverage"], ["Source", result.source], ["Thrower", result.flash.thrower || "Manual"], ["Backend", result.backend], ["Rays", formatNumber(result.testedRays)]];
   details.replaceChildren(...rows.map(([key, value]) => {
     const row = document.createElement("div");

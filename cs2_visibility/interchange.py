@@ -13,10 +13,86 @@ from .models import VisibilityTimelineResult
 VISION_MAGIC = b"CSV1"
 FLASH_MAGIC = b"CSF1"
 VISION_FORMAT_VERSION = 3
+MULTI_VISION_MAGIC = b"CSV2"
+MULTI_VISION_FORMAT_VERSION = 1
 FLASH_FORMAT_VERSION = 1
 VISION_POSE_WIDTH = 6
 VISION_POSE_WIDTHS = {2: 5, 3: 6}
 _HEADER = struct.Struct("<4sIIIII")
+
+
+@dataclass(frozen=True)
+class DecodedMultiVisionTimeline:
+    face_count: int
+    ticks: np.ndarray
+    instant_masks: np.ndarray
+    cumulative_masks: np.ndarray
+    gap_masks: np.ndarray
+    poses: np.ndarray
+
+
+def encode_multi_visibility_timeline(
+    timelines: list[VisibilityTimelineResult], gap_masks: list[np.ndarray],
+) -> bytes:
+    """Encode aligned per-player vision and frame-local exposure-gap masks."""
+    if not timelines or len(timelines) != len(gap_masks):
+        raise ValueError("A multi-player result requires matching timelines and gap masks.")
+    first = timelines[0]
+    frame_count, face_count = len(first.ticks), first.face_count
+    width = (face_count + 7) // 8
+    blocks = []
+    for timeline, gaps in zip(timelines, gap_masks, strict=True):
+        if timeline.face_count != face_count or not np.array_equal(timeline.ticks, first.ticks):
+            raise ValueError("Multi-player vision timelines must have identical ticks and geometry.")
+        if gaps.shape != (frame_count, width):
+            raise ValueError("Gap timeline dimensions do not match the vision timeline.")
+        if timeline.positions is None or timeline.yaws is None or timeline.pitches is None:
+            raise ValueError("Multi-player vision timelines require player poses.")
+        ducks = np.zeros(frame_count, dtype=np.float32) if timeline.ducks is None else timeline.ducks
+        poses = np.column_stack((timeline.positions, timeline.yaws, timeline.pitches, ducks)).astype("<f4")
+        blocks.extend((
+            poses.tobytes(order="C"),
+            np.asarray(timeline.instant_masks, dtype=np.uint8).tobytes(order="C"),
+            np.asarray(timeline.cumulative_masks, dtype=np.uint8).tobytes(order="C"),
+            np.asarray(gaps, dtype=np.uint8).tobytes(order="C"),
+        ))
+    return b"".join((
+        _HEADER.pack(MULTI_VISION_MAGIC, MULTI_VISION_FORMAT_VERSION, face_count, frame_count, width, len(timelines)),
+        np.asarray(first.ticks, dtype="<u4").tobytes(order="C"),
+        *blocks,
+    ))
+
+
+def decode_multi_visibility_timeline(payload: bytes) -> DecodedMultiVisionTimeline:
+    """Decode the CSV2 multi-player vision/gap interchange format."""
+    if len(payload) < _HEADER.size:
+        raise ValueError("Multi-player visibility timeline is truncated.")
+    magic, version, face_count, frame_count, width, player_count = _HEADER.unpack_from(payload)
+    if magic != MULTI_VISION_MAGIC or version != MULTI_VISION_FORMAT_VERSION or not player_count:
+        raise ValueError("Unsupported multi-player visibility timeline format.")
+    if width != (face_count + 7) // 8:
+        raise ValueError("Multi-player visibility timeline has an invalid mask width.")
+    ticks_size = frame_count * 4
+    pose_size = frame_count * VISION_POSE_WIDTH * 4
+    mask_size = frame_count * width
+    expected = _HEADER.size + ticks_size + player_count * (pose_size + mask_size * 3)
+    if len(payload) != expected:
+        raise ValueError("Multi-player visibility timeline length does not match its header.")
+    offset = _HEADER.size
+    ticks = np.frombuffer(payload, dtype="<u4", count=frame_count, offset=offset).copy()
+    offset += ticks_size
+    poses, instant, cumulative, gaps = [], [], [], []
+    for _ in range(player_count):
+        poses.append(np.frombuffer(payload, dtype="<f4", count=frame_count * VISION_POSE_WIDTH, offset=offset).reshape(frame_count, VISION_POSE_WIDTH).copy())
+        offset += pose_size
+        player_masks = []
+        for _mask_kind in range(3):
+            player_masks.append(np.frombuffer(payload, dtype=np.uint8, count=mask_size, offset=offset).reshape(frame_count, width).copy())
+            offset += mask_size
+        instant.append(player_masks[0]); cumulative.append(player_masks[1]); gaps.append(player_masks[2])
+    return DecodedMultiVisionTimeline(
+        face_count, ticks, np.asarray(instant), np.asarray(cumulative), np.asarray(gaps), np.asarray(poses),
+    )
 
 
 @dataclass(frozen=True)

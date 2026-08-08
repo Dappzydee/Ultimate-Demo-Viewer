@@ -2,6 +2,15 @@
 
 All notable, explicitly versioned changes to this project are recorded here.
 
+## 1.0.0 - 2026-08-08 - Multi-player vision and exposure gaps
+
+- Added frame-local exposure-gap simulation for static-map areas with unobstructed line of sight to a player but outside that player's configured vision FOV.
+- Added independent Vision and Gap generation toggles plus independent playback visibility toggles; vision remains cumulative when requested while gaps always show only the current tick.
+- Replaced the single-player Vision selector with a team-grouped multi-player menu, a shared time window capped at the earliest selected death, and simultaneous path and pose previews.
+- Added aligned per-player replay masks and poses in the compact CSV2 result format while retaining playback support for existing CSV1 vision results and saved sessions.
+- Changed vision coloring from red to green, added bright translucent red gap coloring, assigned distinct per-player hues, and added cyan, magenta, and yellow overlap states.
+- Updated GLB snapshot exports, result history/details, README guidance, and automated coverage for gap classification and the new replay interchange; all 19 automated tests pass.
+
 ## 0.9.0 - 2026-08-03 - Crouch poses and consistent round clocks
 
 - Applied the reverse-counting configured round clock to recorded Flash events, Lineup lists and event details, Vision replay, and Vision history ranges.

@@ -55,6 +55,15 @@ h2 { margin: 0 0 10px; color: #aab3bd; font-size: 11px; letter-spacing: .09em; t
 .field select, .field input { width: 100%; color: var(--text); }
 .toggle-field { display: flex; align-items: center; gap: 7px; color: #c5ccd3; font-size: 11px; cursor: pointer; }
 .toggle-field input { width: 15px; height: 15px; margin: 0; accent-color: var(--accent); }
+.player-select-list { max-height: 180px; overflow-y: auto; border: 1px solid var(--line); border-radius: 4px; background: #11151a; }
+.player-team-heading { padding: 6px 8px 3px; color: #8e9aa5; font-size: 9px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; }
+.player-choice { display: flex; align-items: center; gap: 7px; padding: 6px 8px; color: #d3dae0; cursor: pointer; }
+.player-choice:hover { background: #20262d; }
+.player-choice input { margin: 0; accent-color: var(--accent); }
+.player-hue { width: 9px; height: 9px; border-radius: 50%; background: hsl(var(--player-hue) 78% 57%); }
+.simulation-toggles { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; padding: 7px; border: 1px solid var(--line-soft); border-radius: 4px; }
+.timeline-toggle { display: flex; align-items: center; gap: 4px; white-space: nowrap; }
+.timeline-toggle input { margin: 0; accent-color: var(--accent); }
 .analysis-workspace { display: grid; grid-template-columns: 82px minmax(0, 1fr); gap: 10px; align-items: start; }
 .task-tabs { display: flex; flex-direction: column; gap: 5px; }
 .task-tabs button { width: 100%; min-height: 38px; padding: 7px 5px; color: var(--muted); }

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 import json
 import mimetypes
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -23,9 +23,10 @@ from cs2_visibility.flash_coverage import FlashCoverageConfig, export_flash_cove
 from cs2_visibility.flash_events import FlashDetonation
 from cs2_visibility.interchange import (
     decode_flash_intensities,
+    decode_multi_visibility_timeline,
     decode_visibility_timeline,
     encode_flash_intensities,
-    encode_visibility_timeline,
+    encode_multi_visibility_timeline,
 )
 from cs2_visibility.models import AnalysisConfig
 from cs2_visibility.session import DemoSession
@@ -278,7 +279,16 @@ class ApplicationState:
         tick_step = int(request.get("tickStep", 4))
         eye_height = float(request.get("eyeHeight", 64.0))
         crouch_eye_height = float(request.get("crouchEyeHeight", 46.0))
-        player_id = str(request["playerId"])
+        requested_players = request.get("playerIds") or [request.get("playerId")]
+        player_ids = [str(value) for value in requested_players if value]
+        if not player_ids:
+            raise ValueError("Select at least one player.")
+        if len(set(player_ids)) != len(player_ids):
+            raise ValueError("Each selected player may only appear once.")
+        vision_enabled = bool(request.get("visionEnabled", True))
+        gap_enabled = bool(request.get("gapEnabled", False))
+        if not vision_enabled and not gap_enabled:
+            raise ValueError("Enable vision coloring, gap coloring, or both.")
         round_number = int(request["roundNumber"])
         config = AnalysisConfig(
             horizontal_fov_degrees=float(request.get("fov", 90.0)),
@@ -289,9 +299,10 @@ class ApplicationState:
             prefer_gpu=not bool(request.get("forceCpu", False)),
         )
         cache_key = self._cache_key("vision", {
-            "playerId": player_id, "roundNumber": round_number, "timeMode": time_mode,
+            "playerIds": player_ids, "roundNumber": round_number, "timeMode": time_mode,
             "startSeconds": start_seconds, "endSeconds": end_seconds, "tickStep": tick_step,
             "eyeHeight": eye_height, "crouchEyeHeight": crouch_eye_height,
+            "visionEnabled": vision_enabled, "gapEnabled": gap_enabled,
             "config": asdict(config),
         })
         cached = self._cached_job("vision", cache_key)
@@ -299,33 +310,62 @@ class ApplicationState:
             return cached
 
         def analyze(job: AnalysisJob) -> None:
-            poses = session.select_poses(
-                player_id, round_number, start_seconds, end_seconds,
-                instant=instant, tick_step=tick_step,
-                eye_height=eye_height, crouch_eye_height=crouch_eye_height,
-            )
-            job.message = f"Analyzing {len(poses)} player poses"
-            timeline = session.analyze_vision(
-                poses, config, self._job_progress(job, "Raycasting player vision"),
-            )
-            player = next(item for item in session.players if item.id == player_id)
+            pose_sets = [session.select_poses(
+                player_id, round_number, start_seconds, end_seconds, instant=instant,
+                tick_step=tick_step, eye_height=eye_height, crouch_eye_height=crouch_eye_height,
+            ) for player_id in player_ids]
+            shared_ticks = [pose.tick for pose in pose_sets[0]]
+            if any([pose.tick for pose in poses] != shared_ticks for poses in pose_sets[1:]):
+                raise ValueError("Selected players do not have aligned demo ticks in this time window.")
+            job.message = f"Analyzing {len(player_ids)} player(s) across {len(shared_ticks)} frame(s)"
+            timelines = []
+            gaps = []
+            ray_count = 0
+            total_stages = len(player_ids) * (2 if gap_enabled else 1)
+            stage = 0
+
+            def stage_progress(completed: int, total: int) -> None:
+                job.progress = (stage + (completed / total if total else 1.0)) / total_stages
+
+            for index, poses in enumerate(pose_sets):
+                job.message = f"Player {index + 1}/{len(player_ids)}: raycasting vision"
+                timeline = session.analyze_vision(poses, config, stage_progress)
+                stage += 1
+                timelines.append(timeline)
+                ray_count += timeline.tested_rays
+                if gap_enabled:
+                    job.message = f"Player {index + 1}/{len(player_ids)}: raycasting exposure"
+                    exposure = session.analyze_vision(
+                        poses, replace(config, horizontal_fov_degrees=360.0), stage_progress,
+                    )
+                    stage += 1
+                    ray_count += exposure.tested_rays
+                    gaps.append(np.bitwise_and(exposure.instant_masks, np.bitwise_not(timeline.instant_masks)))
+                else:
+                    gaps.append(np.zeros_like(timeline.instant_masks))
+            players = [next(item for item in session.players if item.id == player_id) for player_id in player_ids]
             metadata = {
                 "timeMode": time_mode,
                 "roundNumber": round_number,
-                "playerId": player.id,
-                "playerName": player.name,
+                "playerIds": [player.id for player in players],
+                "playerNames": [player.name for player in players],
+                "playerId": players[0].id,
+                "playerName": players[0].name,
                 "startSeconds": start_seconds,
                 "endSeconds": end_seconds,
                 "tickRate": session.tick_rate,
-                "frameCount": timeline.processed_poses,
-                "faceCount": timeline.face_count,
-                "testedRays": timeline.tested_rays,
-                "backend": timeline.backend,
+                "frameCount": timelines[0].processed_poses,
+                "faceCount": timelines[0].face_count,
+                "testedRays": ray_count,
+                "backend": timelines[0].backend,
+                "visionEnabled": vision_enabled,
+                "gapEnabled": gap_enabled,
                 "config": asdict(config),
             }
             result_id = uuid.uuid4().hex
             self._store_result(StoredResult(
-                result_id, "vision", metadata, encode_visibility_timeline(timeline), cache_key=cache_key,
+                result_id, "vision", metadata,
+                encode_multi_visibility_timeline(timelines, gaps), cache_key=cache_key,
             ))
             job.result_id = result_id
 
@@ -413,6 +453,21 @@ class ApplicationState:
         session = self._require_session()
         result = self.get_result(result_id)
         if result.analysis_type == "vision":
+            if result.data[:4] == b"CSV2":
+                timeline = decode_multi_visibility_timeline(result.data)
+                if not len(timeline.ticks):
+                    raise ValueError("The vision result has no replay frames.")
+                frame_index = len(timeline.ticks) - 1 if frame is None else max(0, min(frame, len(timeline.ticks) - 1))
+                vision_source = timeline.instant_masks if mode == "instant" else timeline.cumulative_masks
+                vision = np.any(np.unpackbits(vision_source[:, frame_index], axis=1, bitorder="little")[:, :timeline.face_count], axis=0)
+                gap = np.any(np.unpackbits(timeline.gap_masks[:, frame_index], axis=1, bitorder="little")[:, :timeline.face_count], axis=0)
+                colors = np.full((timeline.face_count, 4), (160, 160, 160, 255), dtype=np.uint8)
+                if result.metadata.get("visionEnabled", True): colors[vision] = (35, 235, 105, 220)
+                if result.metadata.get("gapEnabled", False): colors[gap] = (255, 70, 70, 205)
+                colors[vision & gap] = (255, 220, 80, 255)
+                mesh = session.mesh.copy(); mesh.visual.face_colors = colors
+                from cs2_visibility.geometry import export_glb_bytes
+                return export_glb_bytes(mesh)
             timeline = decode_visibility_timeline(result.data)
             if not len(timeline.ticks):
                 raise ValueError("The vision result has no replay frames.")

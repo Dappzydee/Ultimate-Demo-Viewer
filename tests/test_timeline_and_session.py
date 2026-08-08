@@ -24,7 +24,9 @@ from cs2_visibility.grenade_lineups import (
 )
 from cs2_visibility.interchange import (
     decode_flash_intensities,
+    decode_multi_visibility_timeline,
     decode_visibility_timeline,
+    encode_multi_visibility_timeline,
     encode_visibility_timeline,
 )
 from cs2_visibility.models import AnalysisConfig, PlayerPose
@@ -107,6 +109,15 @@ class VisibilityTimelineTests(unittest.TestCase):
         ))
         self.assertIsNone(legacy.positions)
         np.testing.assert_array_equal(legacy.final_mask, [True, True])
+
+        multi = decode_multi_visibility_timeline(encode_multi_visibility_timeline(
+            [result, replace(result, positions=result.positions + 5)],
+            [np.array([[2], [1]], dtype=np.uint8), np.array([[0], [2]], dtype=np.uint8)],
+        ))
+        self.assertEqual(multi.instant_masks.shape, (2, 2, 1))
+        np.testing.assert_array_equal(multi.ticks, [100, 104])
+        np.testing.assert_allclose(multi.poses[1, :, :3], np.full((2, 3), 5))
+        np.testing.assert_array_equal(multi.gap_masks[:, :, 0], [[2, 1], [0, 2]])
 
     def test_fused_backend_bypasses_generic_ray_materialization(self) -> None:
         raycaster = FusedRaycaster()
@@ -224,6 +235,7 @@ class SessionArchiveTests(unittest.TestCase):
                 "playerId": "steam:7", "roundNumber": 1, "timeMode": "instant",
                 "startSeconds": 1, "endSeconds": 1, "tickStep": 4,
                 "maxDistance": 30, "samplesPerTriangle": 1, "forceCpu": True,
+                "eyeHeight": 0, "crouchEyeHeight": 0, "gapEnabled": True,
             }
             job = state.start_vision(vision_request)
             for _ in range(100):
@@ -233,11 +245,13 @@ class SessionArchiveTests(unittest.TestCase):
             self.assertEqual(job.status, "complete", job.error)
             result = state.get_result(job.result_id)
             self.assertEqual(result.analysis_type, "vision")
-            decoded = decode_visibility_timeline(result.data)
+            decoded = decode_multi_visibility_timeline(result.data)
             self.assertEqual(decoded.face_count, 2)
-            np.testing.assert_allclose(decoded.positions, [[1, 2, 3]])
-            np.testing.assert_allclose(decoded.yaws, [90])
-            np.testing.assert_allclose(decoded.ducks, [1])
+            np.testing.assert_allclose(decoded.poses[0, :, :3], [[1, 2, 3]])
+            np.testing.assert_allclose(decoded.poses[0, :, 3], [90])
+            np.testing.assert_allclose(decoded.poses[0, :, 5], [1])
+            gap_faces = np.unpackbits(decoded.gap_masks[0, 0], bitorder="little")[:2]
+            np.testing.assert_array_equal(gap_faces, [1, 0])
             self.assertEqual(result.metadata["playerName"], "Player")
             self.assertEqual(state.export_result_glb(job.result_id, "cumulative", None)[:4], b"glTF")
             cached_job = state.start_vision(vision_request)

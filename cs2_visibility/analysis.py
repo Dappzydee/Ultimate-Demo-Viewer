@@ -340,7 +340,7 @@ def resolve_tri_path(map_name: str, override: Path | None) -> Path:
 
 
 def export_colored_mesh(mesh: trimesh.Trimesh, seen_mask: np.ndarray, output_path: Path) -> None:
-    """Export a GLB with red seen faces and gray unseen faces."""
+    """Export a GLB with green seen faces and gray unseen faces."""
     output_path.write_bytes(export_colored_mesh_bytes(mesh, seen_mask))
 
 
@@ -349,7 +349,7 @@ def export_colored_mesh_bytes(mesh: trimesh.Trimesh, seen_mask: np.ndarray) -> b
     if len(seen_mask) != len(mesh.faces):
         raise ValueError("Expected one visibility value for every mesh face.")
     colors = np.full((len(mesh.faces), 4), (160, 160, 160, 255), dtype=np.uint8)
-    colors[seen_mask] = (255, 0, 0, 255)
+    colors[seen_mask] = (35, 235, 105, 220)
     output_mesh = mesh.copy()
     output_mesh.visual.face_colors = colors
     return export_glb_bytes(output_mesh)

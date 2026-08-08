@@ -4,19 +4,19 @@ const VERTEX_SHADER = `#version 300 es
 precision highp float;
 layout(location=0) in vec3 a_position;
 layout(location=1) in vec4 a_color;
-layout(location=2) in float a_resultValue;
+layout(location=2) in vec4 a_resultColor;
 uniform mat4 u_viewProjection;
 uniform mat4 u_model;
 uniform vec4 u_baseColor;
 uniform bool u_hasColor;
 out vec4 v_color;
 out vec3 v_worldPosition;
-flat out float v_resultValue;
+flat out vec4 v_resultColor;
 void main() {
   vec4 world = u_model * vec4(a_position, 1.0);
   v_worldPosition = world.xyz;
   v_color = (u_hasColor ? a_color : vec4(1.0)) * u_baseColor;
-  v_resultValue = a_resultValue;
+  v_resultColor = a_resultColor;
   gl_Position = u_viewProjection * world;
 }`;
 
@@ -24,7 +24,7 @@ const FRAGMENT_SHADER = `#version 300 es
 precision highp float;
 in vec4 v_color;
 in vec3 v_worldPosition;
-flat in float v_resultValue;
+flat in vec4 v_resultColor;
 uniform int u_shading;
 uniform int u_resultMode;
 uniform float u_exposure;
@@ -43,11 +43,13 @@ void main() {
     color = normal * 0.5 + 0.5;
   } else {
     if (u_resultMode == 1) {
-      color = mix(vec3(0.627), vec3(1.0, 0.0, 0.0), step(0.5, v_resultValue));
+      color = mix(vec3(0.627), vec3(0.08, 0.92, 0.32), step(0.5, v_resultColor.r));
     } else if (u_resultMode == 2) {
-      color = v_resultValue <= 0.0
+      color = v_resultColor.r <= 0.0
         ? vec3(0.627)
-        : mix(vec3(0.39, 0.0, 0.0), vec3(1.0, 0.96, 0.31), v_resultValue);
+        : mix(vec3(0.39, 0.0, 0.0), vec3(1.0, 0.96, 0.31), v_resultColor.r);
+    } else if (u_resultMode == 3) {
+      color = mix(vec3(0.627), v_resultColor.rgb, v_resultColor.a);
     } else {
       color = v_color.rgb;
     }
@@ -78,6 +80,11 @@ out vec4 outColor;
 void main() { outColor = v_color; }`;
 
 const TYPE_ENUM = { 5120: 0x1400, 5121: 0x1401, 5122: 0x1402, 5123: 0x1403, 5125: 0x1405, 5126: 0x1406 };
+
+function hsvColor(hue, saturation, value) {
+  const channel = (offset) => value - value * saturation * Math.max(0, Math.min(1, Math.min((hue * 6 + offset) % 6, 4 - (hue * 6 + offset) % 6)));
+  return [channel(5), channel(3), channel(1)];
+}
 
 function poseMatrix(position, yawDegrees = 0) {
   const angle = Number(yawDegrees) * Math.PI / 180;
@@ -188,45 +195,41 @@ export class ViewerRenderer {
       this.requestRender();
       return;
     }
-    const path = value.path || [];
-    if (path !== this.visionPathSource) {
-      if (this.visionPathResource) this.#disposeLineResource(this.visionPathResource);
-      const pathLines = [];
+    const players = value.players || [value];
+    if (this.visionPathResource) this.#disposeLineResource(this.visionPathResource);
+    const pathLines = [];
+    const selectedLines = [];
+    for (const [playerIndex, player] of players.entries()) {
+      const path = player.path || [];
+      const hue = playerIndex / Math.max(players.length, 1);
+      const tint = hsvColor(hue, 0.7, 1.0);
       for (let index = 1; index < path.length; index++) {
         const start = path[index - 1].position.map(Number);
         const end = path[index].position.map(Number);
         start[2] += 2; end[2] += 2;
-        pathLines.push([start, end, [0.18, 0.48, 0.65, 0.52]]);
+        pathLines.push([start, end, [...tint, 0.5]]);
+        const selected = path[index].seconds >= player.start.seconds && path[index - 1].seconds <= player.end.seconds;
+        if (selected) selectedLines.push([start, end, [...tint, 1.0]]);
       }
-      this.visionPathResource = pathLines.length ? this.#createLineResource(pathLines) : null;
-      this.visionPathSource = path;
+      if (value.showModels !== false) {
+        this.visionPreviewInstances.push({
+          asset: Number(player.start.duck || 0) >= 0.5 ? "playerCrouchAim" : "playerAim",
+          id: `vision-start-${playerIndex}`, position: player.start.position,
+          yaw: player.start.yaw, pitch: player.start.pitch, tint: [...tint, 1.0],
+          lookPivot: Number(player.start.duck || 0) >= 0.5 ? 41 : 51,
+        });
+        if (!value.instant) this.visionPreviewInstances.push({
+          asset: Number(player.end.duck || 0) >= 0.5 ? "playerCrouchAim" : "playerAim",
+          id: `vision-end-${playerIndex}`, position: player.end.position,
+          yaw: player.end.yaw, pitch: player.end.pitch, tint: [...tint, 1.0],
+          lookPivot: Number(player.end.duck || 0) >= 0.5 ? 41 : 51,
+        });
+      }
     }
+    this.visionPathResource = pathLines.length ? this.#createLineResource(pathLines) : null;
+    this.visionPathSource = players.map((player) => player.path);
     if (this.visionSelectionResource) this.#disposeLineResource(this.visionSelectionResource);
-    const selectedLines = [];
-    for (let index = 1; index < path.length; index++) {
-      const selected = path[index].seconds >= value.start.seconds
-        && path[index - 1].seconds <= value.end.seconds;
-      if (!selected) continue;
-      const start = path[index - 1].position.map(Number);
-      const end = path[index].position.map(Number);
-      start[2] += 2; end[2] += 2;
-      selectedLines.push([start, end, [0.20, 0.92, 1.0, 1.0]]);
-    }
     this.visionSelectionResource = selectedLines.length ? this.#createLineResource(selectedLines) : null;
-    if (value.showModels !== false) {
-      this.visionPreviewInstances.push({
-        asset: Number(value.start.duck || 0) >= 0.5 ? "playerCrouchAim" : "playerAim",
-        id: "vision-start", position: value.start.position,
-        yaw: value.start.yaw, pitch: value.start.pitch, tint: [0.55, 1.0, 1.0, 1.0],
-        lookPivot: Number(value.start.duck || 0) >= 0.5 ? 41 : 51,
-      });
-      if (!value.instant) this.visionPreviewInstances.push({
-        asset: Number(value.end.duck || 0) >= 0.5 ? "playerCrouchAim" : "playerAim",
-        id: "vision-end", position: value.end.position,
-        yaw: value.end.yaw, pitch: value.end.pitch, tint: [1.0, 0.63, 0.28, 1.0],
-        lookPivot: Number(value.end.duck || 0) >= 0.5 ? 41 : 51,
-      });
-    }
     this.requestRender();
   }
 
@@ -238,20 +241,31 @@ export class ViewerRenderer {
     for (let face = 0; face < faceValues.length; face++) {
       const value = faceValues[face];
       if (source) {
-        values[source[face * 3]] = value;
-        values[source[face * 3 + 1]] = value;
-        values[source[face * 3 + 2]] = value;
+        for (const vertex of [source[face * 3], source[face * 3 + 1], source[face * 3 + 2]]) values.set([value, 0, 0, 255], vertex * 4);
       } else {
         const base = face * 3;
-        values[base] = value;
-        values[base + 1] = value;
-        values[base + 2] = value;
+        values.set([value, 0, 0, 255, value, 0, 0, 255, value, 0, 0, 255], base * 4);
       }
     }
     const gl = this.gl;
     gl.bindBuffer(gl.ARRAY_BUFFER, resource.resultBuffer);
     gl.bufferSubData(gl.ARRAY_BUFFER, 0, values);
     resource.resultMode = mode === "flash" ? 2 : 1;
+    this.requestRender();
+  }
+
+  setFaceColors(faceColors) {
+    const resource = this.resources.find((item) => item.drawable.triangleCount === faceColors.length / 4);
+    if (!resource) throw new Error(`Result has ${faceColors.length / 4} faces, but the loaded map does not.`);
+    const source = resource.drawable.indices?.array;
+    for (let face = 0; face < faceColors.length / 4; face++) {
+      const color = faceColors.subarray(face * 4, face * 4 + 4);
+      if (source) for (const vertex of [source[face * 3], source[face * 3 + 1], source[face * 3 + 2]]) resource.resultArray.set(color, vertex * 4);
+      else resource.resultArray.set([...color, ...color, ...color], face * 12);
+    }
+    this.gl.bindBuffer(this.gl.ARRAY_BUFFER, resource.resultBuffer);
+    this.gl.bufferSubData(this.gl.ARRAY_BUFFER, 0, resource.resultArray);
+    resource.resultMode = 3;
     this.requestRender();
   }
 
@@ -828,11 +842,11 @@ export class ViewerRenderer {
       indexCount = drawable.indices.count;
     }
     const resultBuffer = gl.createBuffer();
-    const resultArray = new Uint8Array(drawable.vertexCount);
+    const resultArray = new Uint8Array(drawable.vertexCount * 4);
     gl.bindBuffer(gl.ARRAY_BUFFER, resultBuffer);
     gl.bufferData(gl.ARRAY_BUFFER, resultArray, gl.DYNAMIC_DRAW);
     gl.enableVertexAttribArray(2);
-    gl.vertexAttribPointer(2, 1, gl.UNSIGNED_BYTE, true, 0, 0);
+    gl.vertexAttribPointer(2, 4, gl.UNSIGNED_BYTE, true, 0, 0);
     gl.bindVertexArray(null);
     return {
       drawable, vao, vertexBuffer, colorBuffer, indexBuffer, indexType, indexCount,

@@ -64,7 +64,15 @@
               <div class="task-pane">
                 <div id="vision-controls" class="control-stack" role="tabpanel" aria-labelledby="vision-tab">
                   <label class="field">Round<select id="round-select"></select></label>
-                  <label class="field">Player<select id="player-select"></select></label>
+                  <div class="field">
+                    <span>Players</span>
+                    <div id="player-select-list" class="player-select-list" aria-label="Players to simulate"></div>
+                    <select id="player-select" hidden aria-hidden="true"></select>
+                  </div>
+                  <div class="simulation-toggles" aria-label="Coloring simulations">
+                    <label class="toggle-field"><input id="vision-coloring-toggle" type="checkbox" checked><span>Vision coloring</span></label>
+                    <label class="toggle-field"><input id="gap-coloring-toggle" type="checkbox"><span>Gap exposure coloring</span></label>
+                  </div>
                   <label class="toggle-field">
                     <input id="player-marker-toggle" type="checkbox" checked>
                     <span>Show player position and facing</span>
@@ -95,7 +103,7 @@
                       </label>
                     </div>
                   </details>
-                  <button id="analyze-vision-button" class="primary wide-button">Analyze vision</button>
+                  <button id="analyze-vision-button" class="primary wide-button">Analyze vision / gaps</button>
                 </div>
 
                 <div id="flash-controls" class="control-stack" role="tabpanel" aria-labelledby="flash-tab" hidden>
@@ -248,6 +256,8 @@
             <label>View
               <select id="replay-mode"><option value="instant">Current</option><option value="cumulative" selected>Accumulated</option></select>
             </label>
+            <label class="timeline-toggle"><input id="playback-vision-toggle" type="checkbox" checked> Vision</label>
+            <label class="timeline-toggle"><input id="playback-gap-toggle" type="checkbox" checked> Gaps</label>
             <input id="frame-slider" type="range" min="0" max="0" value="0" aria-label="Replay frame">
             <span id="replay-time">—</span>
             <label>Speed

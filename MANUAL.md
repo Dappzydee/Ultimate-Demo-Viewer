@@ -2,7 +2,7 @@
 
 This software loads a Counter-Strike 2 `.dem` once, runs repeated analyses in memory, and displays colored 3D map geometry in its integrated local viewer. It contains two visualization tools:
 
-- Player vision: static map faces a selected player could see during a selected time window.
+- Player vision and exposure gaps: static map faces selected players could see, plus unobstructed areas outside their current FOV.
 - Flash coverage: static map faces that could be affected by one selected flashbang detonation.
 
 The repository also includes a non-rendering grenade-lineup extractor. It derives stand/aim references, movement paths, throw classification, and console commands from player ticks around every grenade release.
@@ -15,7 +15,7 @@ Both tools use Awpy `.tri` map geometry and raycasts. They model static geometry
 python viewer.py
 ```
 
-Open or drop a `.dem`, then select Vision, Flash, or Lineups. Vision supports an instant timestamp or a start/end interval. Its sliders show the real reverse-counting round clock and stop at the selected player's death or round end. Selecting a player draws the full alive-period route; Instant shows one aiming model while Interval keeps separately colored start and end models visible with their recorded look angles and crouch state. These selection models clear when an analysis result opens. Vision replay switches between standing and crouching models and draws a cyan exact-look ray. Interval results include a timeline with current and accumulated visibility modes. Flash events and Lineup event details use the same round clock. Flash events are grouped by team; manual flashes can be entered as XYZ coordinates or placed by clicking the map. Lineups are detected automatically at load time and do not need a separate Analyze action.
+Open or drop a `.dem`, then select Vision, Flash, or Lineups. Vision supports an instant timestamp or a start/end interval shared by every selected player and capped at their earliest death. The team-grouped player menu previews all selected routes and endpoint poses together. Enable vision coloring, gap coloring, or both before analysis. Green vision can be replayed as current or accumulated coverage; translucent red exposure gaps always show only the current tick. Playback can toggle either layer independently, uses player-specific hues, and highlights multi-player overlaps. Flash events and Lineup event details use the same round clock. Flash events are grouped by team; manual flashes can be entered as XYZ coordinates or placed by clicking the map. Lineups are detected automatically at load time and do not need a separate Analyze action.
 
 In **Lineups**, filter by round, grenade, player, or reference quality and select a throw. Fixed throws keep blue stand/reference and orange release markers plus their yellow reference aim ray. In-motion throws instead show pin pull in purple and actual release in blue, with a separate matching look ray from both poses. Cyan traces movement and red marks the recorded detonation; each aim ray stops at its first map collision or the configured maximum distance. **Frame** fits the approach, **View aim** enters the player's recorded eye position and angles with a centered crosshair, and Escape exits that view. Aim distance and camera FOV are adjustable above the list. The detail card provides movement instructions, classification, speed, reverse-clock event times, warnings, and copyable console commands. Filtered records can be downloaded as JSON or CFG and are retained when saving a new `.cs2session`.
 
@@ -54,7 +54,7 @@ Long-running calculations show a terminal progress bar by default.
 
 ## Player vision
 
-Use `vision.py` to export a GLB where red faces were seen during the time window and gray faces were not.
+Use `vision.py` to export a GLB where green faces were seen during the time window and gray faces were not. Exposure-gap and multi-player analysis are available in the integrated Vision tab.
 
 ```powershell
 python vision.py match.dem --player "donk" --round 1 --start 1:00 --end 1:20 --out player_vision.glb
